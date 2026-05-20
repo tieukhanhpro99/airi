@@ -252,6 +252,22 @@ export function setupDiscordService() {
       pushStatus()
     })
 
+    // Auto-sync slash commands per-guild whenever the bot joins a new server.
+    // This fires both on initial guild availability after login and when the
+    // bot is added to a new server later.
+    discordClient.on(Events.GuildCreate, async (guild) => {
+      try {
+        // We don't have the latest CORE_COMMANDS list in main; we let the
+        // renderer resync via the existing flow on next watch trigger. The
+        // renderer's `syncCommands(true)` is called by the Stage window when
+        // it sees the GuildCreate event log, so we just emit a log line.
+        pushLog('GUILD_JOIN', `Joined guild "${guild.name}". Renderer will resync slash commands.`)
+      }
+      catch (err: any) {
+        pushLog('ERROR', `GuildCreate handler failed: ${err?.message ?? 'unknown'}`)
+      }
+    })
+
     discordClient.on(Events.ShardDisconnect, (_, shardId) => {
       pushLog('SHARD_DISCONNECT', `Shard ${shardId} disconnected`)
       pushStatus()
@@ -566,9 +582,37 @@ export function setupDiscordService() {
     }
 
     try {
-      pushLog('COMMAND_REG', `Registering ${payload.commands.length} global commands...`)
+      // Strategy: register both globally AND per-guild.
+      //
+      // Global registration is what we ultimately want (works in DMs, no per-guild
+      // re-registration needed when the bot joins new servers). BUT global
+      // commands take up to ~1 hour to propagate to Discord clients, which
+      // makes development and "I added new commands" UX awful.
+      //
+      // Per-guild registration is instant (autocomplete shows up the moment
+      // you type `/` in that server). Discord deduplicates commands that exist
+      // in both scopes, so the user won't see "/look" twice — they'll only see
+      // the guild scope until the global one catches up, and never see duplicates
+      // afterwards.
+      pushLog('COMMAND_REG', `Registering ${payload.commands.length} commands...`)
+
+      // 1. Global (slow propagation, but covers DMs and future guilds)
       await discordClient.application.commands.set(payload.commands)
-      pushLog('COMMAND_REG', 'Commands registered successfully')
+      pushLog('COMMAND_REG', `Global commands registered (may take up to 1h to appear)`)
+
+      // 2. Per-guild (instant, for every guild the bot is currently in)
+      const guilds = [...discordClient.guilds.cache.values()]
+      let perGuildCount = 0
+      for (const guild of guilds) {
+        try {
+          await guild.commands.set(payload.commands)
+          perGuildCount++
+        }
+        catch (err: any) {
+          pushLog('ERROR', `Per-guild command registration failed for ${guild.name}: ${err?.message ?? 'unknown'}`)
+        }
+      }
+      pushLog('COMMAND_REG', `Per-guild commands synced for ${perGuildCount}/${guilds.length} guilds (instant)`)
     }
     catch (err: any) {
       pushLog('ERROR', `Command registration failed: ${err.message}`)

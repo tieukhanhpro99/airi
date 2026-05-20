@@ -51,7 +51,7 @@ const MAX_EVENT_LOG_ENTRIES = 200
 
 // ── Slash Command Definitions ──────────────────────────────────────────────────
 
-const COMMANDS_VERSION = 6
+const COMMANDS_VERSION = 9
 const CORE_COMMANDS: DiscordCommandDefinition[] = [
   {
     name: 'status',
@@ -129,6 +129,82 @@ const CORE_COMMANDS: DiscordCommandDefinition[] = [
   {
     name: 'leave',
     description: 'Disconnect the bot from the voice channel',
+  },
+  {
+    name: 'look',
+    description: 'Have AIRI take a look at your screen and react to what is shown',
+    options: [
+      {
+        name: 'prompt',
+        description: 'Optional extra hint about what to focus on',
+        type: 3, // String
+        required: false,
+      },
+    ],
+  },
+  {
+    name: 'pausevision',
+    description: 'Pause AIRI\'s ambient screen vision for a few minutes',
+    options: [
+      {
+        name: 'minutes',
+        description: 'How long to pause (default 15)',
+        type: 4, // Integer
+        required: false,
+      },
+    ],
+  },
+  {
+    name: 'resumevision',
+    description: 'Resume AIRI\'s ambient screen vision immediately',
+  },
+  {
+    name: 'vision',
+    description: 'Master switch for ALL vision features (including /look)',
+    options: [
+      {
+        name: 'state',
+        description: 'on or off',
+        type: 3, // String
+        required: true,
+        choices: [
+          { name: 'on', value: 'on' },
+          { name: 'off', value: 'off' },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'smartmode',
+    description: 'Toggle Smart mode (auto-capture when you switch active window)',
+    options: [
+      {
+        name: 'state',
+        description: 'on or off',
+        type: 3, // String
+        required: true,
+        choices: [
+          { name: 'on', value: 'on' },
+          { name: 'off', value: 'off' },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'periodicmode',
+    description: 'Toggle Periodic mode (auto-capture every N minutes)',
+    options: [
+      {
+        name: 'state',
+        description: 'on or off',
+        type: 3, // String
+        required: true,
+        choices: [
+          { name: 'on', value: 'on' },
+          { name: 'off', value: 'off' },
+        ],
+      },
+    ],
   },
   {
     name: 'chatmode',
@@ -1012,6 +1088,142 @@ export const useDiscordStore = defineStore('discord', () => {
             content: `❌ Failed to leave voice channel: ${err?.message ?? 'unknown error'}`,
           })
         }
+      }
+      else if (payload.commandName === 'look') {
+        if (!isElectron) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: 'Vision capture is only available in the Electron desktop build.',
+            ephemeral: true,
+          })
+          return
+        }
+
+        if (!visionStore.configured) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: 'Vision provider is not configured. Open `Settings → Modules → Vision` and pick a provider/model first.',
+            ephemeral: true,
+          })
+          return
+        }
+
+        if (!visionStore.visionMasterEnabled) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: '🙈 Vision đang tắt. Bật bằng `/vision on` hoặc trong Settings.',
+            ephemeral: true,
+          })
+          return
+        }
+
+        if (visionStore.isPaused) {
+          const remaining = visionStore.pauseRemainingMinutes
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: remaining > 0
+              ? `🙈 Vision đang tạm dừng (~${remaining} phút). Resume bằng \`/resumevision\`.`
+              : '🙈 Vision đang tạm dừng. Resume bằng `/resumevision`.',
+            ephemeral: true,
+          })
+          return
+        }
+
+        // Acknowledge fast so the 3s interaction window doesn't expire while
+        // the LLM round-trips. The actual reply will land in the active chat
+        // surface (voice channel if joined, else the originating text channel).
+        await invokeReplyInteraction?.({
+          interactionId: payload.interactionId,
+          content: '👀 Looking at the screen...',
+        })
+
+        const promptOverride = (payload.options.prompt as string | undefined)?.trim() || undefined
+        try {
+          await visionStore.captureOnDemand({ promptOverride, respectBlacklist: false })
+        }
+        catch (err: any) {
+          console.error('[DiscordStore] /look failed:', err)
+        }
+      }
+      else if (payload.commandName === 'vision') {
+        const state = String(payload.options.state || '').toLowerCase()
+        const turnOn = state === 'on'
+        visionStore.setMasterEnabled(turnOn)
+        eventLog.value = [...eventLog.value.slice(-(MAX_EVENT_LOG_ENTRIES - 1)), {
+          timestamp: Date.now(),
+          type: turnOn ? 'VISION_MASTER_ON' : 'VISION_MASTER_OFF',
+          summary: `Master vision switch flipped ${turnOn ? 'ON' : 'OFF'} via /vision`,
+        }]
+        await invokeReplyInteraction?.({
+          interactionId: payload.interactionId,
+          content: turnOn
+            ? '👁️ Vision master switch **ON**. `/look` và auto-modes (nếu bật) hoạt động bình thường.'
+            : '🙈 Vision master switch **OFF**. Mọi capture (kể cả `/look`) bị chặn cho đến khi bật lại.',
+        })
+      }
+      else if (payload.commandName === 'smartmode') {
+        const state = String(payload.options.state || '').toLowerCase()
+        const turnOn = state === 'on'
+        visionStore.smartEnabled = turnOn
+        if (turnOn && !visionStore.isWitnessEnabled) {
+          // Smart mode is gated by the Witness master toggle; flip it on for the
+          // user so the new command actually takes effect.
+          visionStore.isWitnessEnabled = true
+        }
+        await invokeReplyInteraction?.({
+          interactionId: payload.interactionId,
+          content: turnOn
+            ? '👀 Smart mode **ON**. AIRI sẽ tự nhìn khi bạn đổi cửa sổ active (debounced).'
+            : '😴 Smart mode **OFF**. AIRI không tự capture khi đổi cửa sổ nữa.',
+        })
+      }
+      else if (payload.commandName === 'periodicmode') {
+        const state = String(payload.options.state || '').toLowerCase()
+        const turnOn = state === 'on'
+        visionStore.periodicEnabled = turnOn
+        if (turnOn && !visionStore.isWitnessEnabled) {
+          visionStore.isWitnessEnabled = true
+        }
+        await invokeReplyInteraction?.({
+          interactionId: payload.interactionId,
+          content: turnOn
+            ? `⏱️ Periodic mode **ON**. AIRI sẽ tự nhìn mỗi ${visionStore.periodicIntervalMinutes} phút.`
+            : '⏸️ Periodic mode **OFF**. AIRI không tự capture định kỳ nữa.',
+        })
+      }
+      else if (payload.commandName === 'pausevision') {
+        const minutesRaw = payload.options.minutes
+        const minutes = Number(minutesRaw)
+        const indefinite = !minutesRaw || minutes <= 0
+        if (indefinite)
+          visionStore.pauseIndefinitely()
+        else
+          visionStore.pauseFor(minutes)
+        eventLog.value = [...eventLog.value.slice(-(MAX_EVENT_LOG_ENTRIES - 1)), {
+          timestamp: Date.now(),
+          type: 'VISION_PAUSE',
+          summary: indefinite
+            ? 'Vision paused indefinitely via /pausevision'
+            : `Vision paused for ${minutes} min via /pausevision`,
+        }]
+        await invokeReplyInteraction?.({
+          interactionId: payload.interactionId,
+          content: indefinite
+            ? '🙈 Vision đã tạm dừng. `/look` cũng sẽ không capture cho đến khi `/resumevision`.'
+            : `🙈 Vision đã tạm dừng ${minutes} phút. \`/look\` cũng sẽ không capture trong thời gian này. Resume sớm bằng \`/resumevision\`.`,
+        })
+      }
+      else if (payload.commandName === 'resumevision') {
+        visionStore.resumeNow()
+        eventLog.value = [...eventLog.value.slice(-(MAX_EVENT_LOG_ENTRIES - 1)), {
+          timestamp: Date.now(),
+          type: 'VISION_RESUME',
+          summary: 'Vision resumed via /resumevision',
+        }]
+        await invokeReplyInteraction?.({
+          interactionId: payload.interactionId,
+          content: '👁️ Vision đã bật lại.',
+        })
       }
       else {
         // Fallback for other commands not yet implemented

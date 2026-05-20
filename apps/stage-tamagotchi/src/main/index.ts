@@ -37,6 +37,7 @@ import { setupAutoUpdater } from './services/electron/auto-updater'
 import { createVisionService } from './services/electron/vision'
 import { createSensorsService } from './services/sensors'
 import { cleanupMicToggleShortcut } from './services/shortcuts/mic-toggle'
+import { cleanupVisionHotkeys, setupVisionHotkeys } from './services/shortcuts/vision-hotkeys'
 import { setupTray } from './tray'
 import { setupAboutWindowReusable } from './windows/about'
 import { setupBeatSync } from './windows/beat-sync'
@@ -229,6 +230,7 @@ app.whenReady().then(async () => {
       createI18nService({ context, window: deps.mainWindow, i18n: deps.i18n })
       createMicToggleService({ context, window: deps.mainWindow })
       createVisionService({ context })
+      setupVisionHotkeys(deps.mainWindow)
       const sensorsServicePromise = createSensorsService({ context })
       setupDiscordService()
       defineInvokeHandler(context, electronCaptionToggleVisibility, async () => {
@@ -366,6 +368,7 @@ app.on('before-quit', async (event) => {
     await emitAppBeforeQuit()
     await injeca.stop()
     cleanupMicToggleShortcut()
+    cleanupVisionHotkeys()
     console.log('[@proj-airi/stage-tamagotchi] Shutdown complete. Quitting...')
   }
   catch (err) {
