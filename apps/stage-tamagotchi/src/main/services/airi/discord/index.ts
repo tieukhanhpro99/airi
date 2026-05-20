@@ -4,6 +4,7 @@ import type {
   DiscordInteractionPayload,
   DiscordOutboundImage,
   DiscordServiceStatus,
+  DiscordVoiceState,
 } from '@proj-airi/stage-shared'
 
 import { useLogg } from '@guiiai/logg'
@@ -23,7 +24,13 @@ import {
   discordServiceSimulateEvent,
   discordServiceStart,
   discordServiceStop,
+  discordVoiceGetState,
+  discordVoiceJoinByInteraction,
+  discordVoiceLeave,
+  discordVoiceLeaveByInteraction,
+  discordVoiceUpdateSttConfig,
 } from '../../../../shared/eventa'
+import { createVoiceManager } from './voice'
 
 const log = useLogg('discord-service').useGlobalConfig()
 
@@ -32,6 +39,8 @@ const STATUS_CHANGED_CHANNEL = 'eventa:event:electron:discord:status-changed'
 const EVENT_LOG_CHANNEL = 'eventa:event:electron:discord:event-log'
 const INBOUND_MESSAGE_CHANNEL = 'eventa:event:electron:discord:inbound-message'
 const INTERACTION_CHANNEL = 'eventa:event:electron:discord:interaction'
+const VOICE_STATE_CHANNEL = 'eventa:event:electron:discord:voice:state-changed'
+const VOICE_TRANSCRIPT_CHANNEL = 'eventa:event:electron:discord:voice:transcript-created'
 
 // ── Internal State ─────────────────────────────────────────────────────────────
 
@@ -39,6 +48,7 @@ let discordClient: Client | null = null
 let activeChannelId: string | null = null
 const activeInteractions = new Map<string, any>()
 let lastError: string | null = null
+let voiceManager: ReturnType<typeof createVoiceManager> | null = null
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -315,6 +325,21 @@ export function setupDiscordService() {
 
     discordClient.on(Events.InteractionCreate, handleInteraction)
 
+    // ── Voice Manager Wiring ──────────────────────────────────────────────
+
+    voiceManager = createVoiceManager({
+      getDiscordClient: () => discordClient,
+      callbacks: {
+        onStateChange: (state) => {
+          broadcastToAllWindows(VOICE_STATE_CHANNEL, state)
+        },
+        onTranscript: (transcript) => {
+          broadcastToAllWindows(VOICE_TRANSCRIPT_CHANNEL, transcript)
+        },
+        onLog: (type, summary) => pushLog(type, summary),
+      },
+    })
+
     // ── Login ──────────────────────────────────────────────────────────────
 
     try {
@@ -331,6 +356,13 @@ export function setupDiscordService() {
   })
 
   defineInvokeHandler(context, discordServiceStop, async () => {
+    if (voiceManager) {
+      try {
+        await voiceManager.destroy()
+      }
+      catch { /* ignore */ }
+      voiceManager = null
+    }
     if (discordClient) {
       pushLog('SERVICE', 'Stopping Discord service...')
       try {
@@ -561,6 +593,126 @@ export function setupDiscordService() {
     }
     catch (err: any) {
       pushLog('ERROR', `Failed to reply to interaction: ${err.message}`)
+    }
+  })
+
+  // ── Voice Invoke Handlers ──────────────────────────────────────────────
+
+  defineInvokeHandler(context, discordVoiceJoinByInteraction, async (payload) => {
+    const fallbackState: DiscordVoiceState = voiceManager?.getState() ?? {
+      connected: false,
+      speaking: false,
+      guildId: null,
+      channelId: null,
+      channelName: null,
+      lastError: null,
+      activeSpeakers: [],
+    }
+
+    if (!discordClient?.isReady()) {
+      return { ok: false, error: 'Discord client not ready', state: fallbackState }
+    }
+    if (!voiceManager) {
+      return { ok: false, error: 'Voice manager not initialized', state: fallbackState }
+    }
+
+    const interaction = activeInteractions.get(payload.interactionId)
+    if (!interaction) {
+      return { ok: false, error: 'Interaction expired', state: fallbackState }
+    }
+
+    // Resolve the user's current voice channel from the interaction's GuildMember.
+    const member = interaction.member as { voice?: { channel?: { id: string, name: string, guild: any } } } | undefined
+    const channel = member?.voice?.channel
+    if (!channel) {
+      return { ok: false, error: 'You must be in a voice channel first', state: fallbackState }
+    }
+
+    pushLog('VOICE_JOIN', `Joining voice channel "${channel.name}"...`)
+    const result = await voiceManager.join(channel as any, payload.stt)
+    if (!result.ok) {
+      pushLog('VOICE_JOIN_FAIL', result.error)
+      return { ok: false, error: result.error, state: voiceManager.getState() }
+    }
+
+    pushLog('VOICE_JOIN_OK', `Joined "${result.channelName}"`)
+    return { ok: true, state: voiceManager.getState() }
+  })
+
+  defineInvokeHandler(context, discordVoiceLeaveByInteraction, async (_payload) => {
+    const fallbackState: DiscordVoiceState = voiceManager?.getState() ?? {
+      connected: false,
+      speaking: false,
+      guildId: null,
+      channelId: null,
+      channelName: null,
+      lastError: null,
+      activeSpeakers: [],
+    }
+
+    if (!voiceManager) {
+      return { ok: false, error: 'Voice manager not initialized', state: fallbackState }
+    }
+
+    pushLog('VOICE_LEAVE', 'Leaving voice channel by interaction...')
+    await voiceManager.leave()
+    return { ok: true, state: voiceManager.getState() }
+  })
+
+  defineInvokeHandler(context, discordVoiceLeave, async () => {
+    if (!voiceManager) {
+      return {
+        connected: false,
+        speaking: false,
+        guildId: null,
+        channelId: null,
+        channelName: null,
+        lastError: null,
+        activeSpeakers: [],
+      }
+    }
+    await voiceManager.leave()
+    return voiceManager.getState()
+  })
+
+  defineInvokeHandler(context, discordVoiceUpdateSttConfig, async (payload) => {
+    if (voiceManager && payload?.stt) {
+      voiceManager.setSttConfig(payload.stt)
+    }
+  })
+
+  defineInvokeHandler(context, discordVoiceGetState, async () => {
+    return voiceManager?.getState() ?? {
+      connected: false,
+      speaking: false,
+      guildId: null,
+      channelId: null,
+      channelName: null,
+      lastError: null,
+      activeSpeakers: [],
+    }
+  })
+
+  // ── Native IPC Bypass: TTS audio chunks for active voice channel ──────────
+  // Renderer ships per-sentence TTS buffers (mp3 from vieneutts) here so we can
+  // transcode → push to the active VoiceConnection's AudioPlayer.
+
+  ipcMain.handle('eventa:invoke:electron:discord:voice:enqueue-tts', async (_event, payload: { audio: Uint8Array, mime?: string }) => {
+    if (!voiceManager?.isConnected()) {
+      return { success: false, error: 'voice not connected' }
+    }
+    if (!payload?.audio || payload.audio.byteLength === 0) {
+      return { success: false, error: 'empty audio' }
+    }
+
+    try {
+      const buf = Buffer.from(payload.audio)
+      voiceManager.enqueueTtsAudio(buf, payload.mime ?? 'audio/mpeg')
+      return { success: true }
+    }
+    catch (err: any) {
+      pushLog('VOICE_TTS_FAIL', err?.message ?? 'unknown')
+      return { success: false, error: err?.message ?? 'unknown' }
     }
   })
 

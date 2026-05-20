@@ -166,3 +166,102 @@ export const discordServiceInboundMessage = defineEventa<DiscordInboundMessage>(
 export const discordServiceInteraction = defineEventa<DiscordInteractionPayload>(
   'eventa:event:electron:discord:interaction',
 )
+
+// ── Voice (Voice Channel Audio Pipeline) ───────────────────────────────────────
+
+/** Configuration the renderer ships to the main process so it can transcribe inbound audio. */
+export interface DiscordVoiceSttConfig {
+  baseUrl: string
+  apiKey?: string
+  model: string
+  /** Whisper-style language hint, e.g. `vi` for Vietnamese. Empty = auto-detect. */
+  language?: string
+  /**
+   * Whisper `prompt` parameter — biases recognition toward the wording style of
+   * this prompt, but does NOT lock recognition to a single language. Useful for
+   * Vietnamese conversations that mix English technical terms.
+   */
+  prompt?: string
+  /** `verbose_json`, `json`, or `text` — defaults to `text`. */
+  responseFormat?: 'text' | 'json' | 'verbose_json'
+}
+
+/** Lifecycle state of the active voice connection (only one at a time per AGENTS scope). */
+export interface DiscordVoiceState {
+  /** True when a `joinVoiceChannel` Ready handshake has completed. */
+  connected: boolean
+  /** True while we are currently piping TTS audio out to the channel. */
+  speaking: boolean
+  guildId: string | null
+  channelId: string | null
+  /** Display name of the voice channel (best effort, may be null pre-fetch). */
+  channelName: string | null
+  /** Lower-cased reason when `connected` flips to `false`. */
+  lastError: string | null
+  /** UserIDs currently transmitting audio (echoes Discord's speaking events). */
+  activeSpeakers: string[]
+}
+
+/** Per-utterance transcript pushed from main → renderer after STT completes. */
+export interface DiscordVoiceTranscript {
+  guildId: string
+  channelId: string
+  userId: string
+  username: string
+  displayName: string
+  text: string
+  /** Wall-clock when the user stopped speaking (silence threshold trip). */
+  endedAt: number
+  /** Whisper/speaches sometimes emits a confidence proxy in verbose_json. */
+  confidence?: number
+}
+
+export interface DiscordVoiceJoinByInteractionPayload {
+  interactionId: string
+  stt: DiscordVoiceSttConfig
+}
+
+export interface DiscordVoiceLeaveByInteractionPayload {
+  interactionId: string
+}
+
+export interface DiscordVoiceJoinResult {
+  ok: boolean
+  error?: string
+  state: DiscordVoiceState
+}
+
+/** Join the voice channel of the user who triggered a slash command. */
+export const discordVoiceJoinByInteraction = defineInvokeEventa<DiscordVoiceJoinResult, DiscordVoiceJoinByInteractionPayload>(
+  'eventa:invoke:electron:discord:voice:join-by-interaction',
+)
+
+/** Leave the active voice channel (interaction-aware: replies to the deferred command). */
+export const discordVoiceLeaveByInteraction = defineInvokeEventa<DiscordVoiceJoinResult, DiscordVoiceLeaveByInteractionPayload>(
+  'eventa:invoke:electron:discord:voice:leave-by-interaction',
+)
+
+/** Force-leave any active voice channel without an interaction (e.g. settings toggle). */
+export const discordVoiceLeave = defineInvokeEventa<DiscordVoiceState>(
+  'eventa:invoke:electron:discord:voice:leave',
+)
+
+/** Push the current STT/runtime config (renderer is the source of truth). */
+export const discordVoiceUpdateSttConfig = defineInvokeEventa<void, { stt: DiscordVoiceSttConfig }>(
+  'eventa:invoke:electron:discord:voice:update-stt-config',
+)
+
+/** Read current voice state on demand. */
+export const discordVoiceGetState = defineInvokeEventa<DiscordVoiceState>(
+  'eventa:invoke:electron:discord:voice:get-state',
+)
+
+/** Voice connection state changed (connected, speaking, channel, …). */
+export const discordVoiceStateChanged = defineEventa<DiscordVoiceState>(
+  'eventa:event:electron:discord:voice:state-changed',
+)
+
+/** A user finished an utterance and STT produced text. */
+export const discordVoiceTranscriptCreated = defineEventa<DiscordVoiceTranscript>(
+  'eventa:event:electron:discord:voice:transcript-created',
+)

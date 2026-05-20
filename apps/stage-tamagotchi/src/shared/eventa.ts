@@ -283,5 +283,12 @@ export {
   discordServiceStart,
   discordServiceStatusChanged,
   discordServiceStop,
+  discordVoiceGetState,
+  discordVoiceJoinByInteraction,
+  discordVoiceLeave,
+  discordVoiceLeaveByInteraction,
+  discordVoiceStateChanged,
+  discordVoiceTranscriptCreated,
+  discordVoiceUpdateSttConfig,
 } from '@proj-airi/stage-shared'
 export * from '@proj-airi/stage-shared/shortcuts'

@@ -1,4 +1,4 @@
-import type { DiscordCommandDefinition, DiscordEventLogEntry, DiscordInboundMessage, DiscordInteractionPayload, DiscordServiceStatus } from '@proj-airi/stage-shared'
+import type { DiscordCommandDefinition, DiscordEventLogEntry, DiscordInboundMessage, DiscordInteractionPayload, DiscordServiceStatus, DiscordVoiceState, DiscordVoiceSttConfig, DiscordVoiceTranscript } from '@proj-airi/stage-shared'
 
 import { useElectronEventaInvoke } from '@proj-airi/electron-vueuse'
 import {
@@ -12,6 +12,11 @@ import {
   discordServiceSimulateEvent,
   discordServiceStart,
   discordServiceStop,
+  discordVoiceGetState,
+  discordVoiceJoinByInteraction,
+  discordVoiceLeave,
+  discordVoiceLeaveByInteraction,
+  discordVoiceUpdateSttConfig,
 } from '@proj-airi/stage-shared'
 import { useLocalStorageManualReset } from '@proj-airi/stage-shared/composables'
 import { defineStore } from 'pinia'
@@ -21,10 +26,12 @@ import { stripMarkers } from '../../composables/response-categoriser'
 import { useBackgroundStore } from '../background'
 import { useChatOrchestratorStore } from '../chat'
 import { useChatSessionStore } from '../chat/session-store'
+import { useProvidersStore } from '../providers'
 import { useAiriCardStore } from './airi-card'
 import { useArtistryStore } from './artistry'
 import { useAutonomousArtistryStore } from './artistry-autonomous'
 import { useConsciousnessStore } from './consciousness'
+import { useHearingStore } from './hearing'
 import { useLiveSessionStore } from './live-session'
 import { useSpeechStore } from './speech'
 import { useVisionStore } from './vision'
@@ -35,12 +42,16 @@ const STATUS_CHANGED_CHANNEL = 'eventa:event:electron:discord:status-changed'
 const EVENT_LOG_CHANNEL = 'eventa:event:electron:discord:event-log'
 const INBOUND_MESSAGE_CHANNEL = 'eventa:event:electron:discord:inbound-message'
 const INTERACTION_CHANNEL = 'eventa:event:electron:discord:interaction'
+const VOICE_STATE_CHANNEL = 'eventa:event:electron:discord:voice:state-changed'
+const VOICE_TRANSCRIPT_CHANNEL = 'eventa:event:electron:discord:voice:transcript-created'
+
+const TTS_ENQUEUE_CHANNEL = 'eventa:invoke:electron:discord:voice:enqueue-tts'
 
 const MAX_EVENT_LOG_ENTRIES = 200
 
 // ── Slash Command Definitions ──────────────────────────────────────────────────
 
-const COMMANDS_VERSION = 5
+const COMMANDS_VERSION = 6
 const CORE_COMMANDS: DiscordCommandDefinition[] = [
   {
     name: 'status',
@@ -148,11 +159,57 @@ export const useDiscordStore = defineStore('discord', () => {
   const liveSessionStore = useLiveSessionStore()
   const speechStore = useSpeechStore()
   const visionStore = useVisionStore()
+  const hearingStore = useHearingStore()
+  const providersStore = useProvidersStore()
   // ── Persisted Config ───────────────────────────────────────────────────────
   const enabled = useLocalStorageManualReset<boolean>('settings/discord/enabled', false)
   const token = useLocalStorageManualReset<string>('settings/discord/token', '')
   const lastRegisteredVersion = useLocalStorageManualReset<number>('settings/discord/lastRegisteredVersion', 0)
   const chatMode = useLocalStorageManualReset<'followup' | 'steer' | 'collect'>('settings/discord/chatMode', 'followup')
+
+  // Voice channel feature toggles
+  const voiceEnabled = useLocalStorageManualReset<boolean>('settings/discord/voice/enabled', true)
+  const voiceMuteLocalTts = useLocalStorageManualReset<boolean>('settings/discord/voice/mute-local-tts', true)
+  /** Whisper language hint (`vi`, `en`, `ja`, …). Empty = auto-detect. */
+  const voiceSttLanguage = useLocalStorageManualReset<string>('settings/discord/voice/stt-language', 'vi')
+  /**
+   * Whisper `prompt` bias. Whisper recognises this as conversational priming —
+   * NOT a hard language lock — so users who mix Vietnamese with English tech
+   * jargon still get accurate transcripts.
+   */
+  const voiceSttPrompt = useLocalStorageManualReset<string>(
+    'settings/discord/voice/stt-prompt',
+    'Đây là cuộc trò chuyện tiếng Việt thân mật, đôi khi xen lẫn từ tiếng Anh.',
+  )
+
+  /**
+   * Inserted as a "system note" before each voice turn so the LLM stays in the
+   * desired language. Without this, models tend to drift back to English after
+   * the first reply because the character system prompt itself is usually English.
+   * Set to empty string to disable the directive.
+   */
+  const voiceReplyLanguagePrompt = useLocalStorageManualReset<string>(
+    'settings/discord/voice/reply-language-prompt',
+    'Hãy luôn trả lời bằng tiếng Việt tự nhiên. Có thể xen lẫn từ tiếng Anh khi phù hợp ngữ cảnh, nhưng phần lớn câu trả lời phải là tiếng Việt.',
+  )
+
+  // Per-user voice profiles. Maps Discord userId → display name + free-form notes that
+  // get injected into the LLM context whenever that user speaks. Lets AIRI greet
+  // people by name and remember preferences without a heavy memory subsystem.
+  interface VoiceUserProfile {
+    userId: string
+    displayName: string
+    /** What the assistant should call this user (defaults to displayName). */
+    addressAs?: string
+    /** Free-form notes (relationship, language preference, inside jokes…). Injected before each voice turn. */
+    notes?: string
+    /** ISO timestamp of last interaction (for stale cleanup later). */
+    lastSeen: number
+  }
+  const voiceUserProfiles = useLocalStorageManualReset<Record<string, VoiceUserProfile>>(
+    'settings/discord/voice/user-profiles',
+    {},
+  )
 
   const pendingCollectBatch = ref<{ formattedContent: string, attachments: any[], msg: DiscordInboundMessage }[]>([])
   let collectTimer: ReturnType<typeof setTimeout> | null = null
@@ -191,6 +248,19 @@ export const useDiscordStore = defineStore('discord', () => {
   })
   const eventLog = ref<DiscordEventLogEntry[]>([])
 
+  // ── Voice Channel Live State ───────────────────────────────────────────────
+  const voiceState = ref<DiscordVoiceState>({
+    connected: false,
+    speaking: false,
+    guildId: null,
+    channelId: null,
+    channelName: null,
+    lastError: null,
+    activeSpeakers: [],
+  })
+
+  const isVoiceConnected = computed(() => voiceState.value.connected)
+
   // ── Derived ────────────────────────────────────────────────────────────────
   const configured = computed(() => !!token.value.trim())
   const isConnected = computed(() => serviceStatus.value.state === 'connected')
@@ -209,6 +279,64 @@ export const useDiscordStore = defineStore('discord', () => {
   const invokeRegisterCommands = isElectron ? useElectronEventaInvoke(discordServiceRegisterCommands) : null
   const invokeReplyInteraction = isElectron ? useElectronEventaInvoke(discordServiceReplyInteraction) : null
   const invokeSendImage = isElectron ? useElectronEventaInvoke(discordServiceSendImage) : null
+  const invokeVoiceJoin = isElectron ? useElectronEventaInvoke(discordVoiceJoinByInteraction) : null
+  const invokeVoiceLeaveByInteraction = isElectron ? useElectronEventaInvoke(discordVoiceLeaveByInteraction) : null
+  const invokeVoiceLeave = isElectron ? useElectronEventaInvoke(discordVoiceLeave) : null
+  const invokeVoiceUpdateSttConfig = isElectron ? useElectronEventaInvoke(discordVoiceUpdateSttConfig) : null
+  const invokeVoiceGetState = isElectron ? useElectronEventaInvoke(discordVoiceGetState) : null
+
+  // ── Voice Helpers ──────────────────────────────────────────────────────────
+
+  /**
+   * Build a snapshot of the current STT (transcription) config from the user's
+   * provider settings. Used by both `/summon` and the settings watcher to keep
+   * the main-process voice manager in sync.
+   *
+   * Returns `null` if the user has not yet configured a base URL/model.
+   */
+  function resolveSttConfig(): DiscordVoiceSttConfig | null {
+    const providerId = hearingStore.activeTranscriptionProvider
+    if (!providerId)
+      return null
+
+    const providerConfig = providersStore.getProviderConfig?.(providerId) ?? {}
+    const baseUrl = (providerConfig as any).baseUrl as string | undefined
+    const apiKey = (providerConfig as any).apiKey as string | undefined
+    const model = hearingStore.activeTranscriptionModel || hearingStore.activeCustomModelName || (providerConfig as any).model as string
+
+    if (!baseUrl || !model)
+      return null
+
+    return {
+      baseUrl,
+      apiKey: apiKey || undefined,
+      model,
+      language: voiceSttLanguage.value?.trim() || undefined,
+      prompt: voiceSttPrompt.value?.trim() || undefined,
+      // Speaches/whisper bench is fine with `text`; switch to `verbose_json` later if we need confidence/timestamps.
+      responseFormat: 'text',
+    }
+  }
+
+  /**
+   * Push a TTS audio buffer (e.g. mp3 from vieneutts) into the active Discord
+   * voice channel via raw IPC. No-op when not in a VC. Called from the speech
+   * pipeline tap-out alongside `addAudioToTurn`.
+   */
+  async function pushTtsAudioToVoice(buffer: ArrayBuffer, mime = 'audio/mpeg') {
+    if (!isElectron || !voiceState.value.connected || buffer.byteLength === 0)
+      return
+    try {
+      const audio = new Uint8Array(buffer)
+      const result = await (window as any).electron?.ipcRenderer?.invoke(TTS_ENQUEUE_CHANNEL, { audio, mime })
+      if (!result?.success && result?.error) {
+        console.warn('[DiscordStore] Voice TTS enqueue failed:', result.error)
+      }
+    }
+    catch (err) {
+      console.error('[DiscordStore] Voice TTS enqueue threw:', err)
+    }
+  }
 
   // ── Routing Cache ──────────────────────────────────────────────────────────
   const lastChannelId = ref<string | null>(null)
@@ -312,6 +440,16 @@ export const useDiscordStore = defineStore('discord', () => {
       return
     console.log(`[DiscordStore] Aggregating audio chunk: ${Math.round(buffer.byteLength / 1024)}KB`)
     audioTurnBuffer.value.push(buffer)
+
+    // Real-time fan-out to the active voice channel: if we're in a VC, push the
+    // chunk straight to main so the bot's AudioPlayer can play it. The renderer
+    // also still aggregates a copy in `audioTurnBuffer` for the legacy voice-note
+    // attachment (text-channel fallback when not in a VC).
+    if (voiceEnabled.value && voiceState.value.connected) {
+      // We slice() to avoid sharing the underlying buffer with the renderer's
+      // decodeAudioData() consumer (which detaches its source ArrayBuffer).
+      void pushTtsAudioToVoice(buffer.slice(0))
+    }
   }
 
   async function flushAudioTurn(content?: string) {
@@ -802,6 +940,79 @@ export const useDiscordStore = defineStore('discord', () => {
         // Fire autonomous task with assistant target to force display
         await artistryAutonomousStore.runArtistTask(prompt, chatSession.messages as any, 'assistant')
       }
+      else if (payload.commandName === 'summon') {
+        if (!isElectron || !invokeVoiceJoin) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: 'Voice mode is only available in the Electron desktop build.',
+            ephemeral: true,
+          })
+          return
+        }
+
+        if (!voiceEnabled.value) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: 'Voice mode is disabled in settings.',
+            ephemeral: true,
+          })
+          return
+        }
+
+        const stt = resolveSttConfig()
+        if (!stt) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: 'STT (transcription) provider is not configured. Open `Settings → Hearing` and pick a provider/model first.',
+            ephemeral: true,
+          })
+          return
+        }
+
+        try {
+          const result = await invokeVoiceJoin({ interactionId: payload.interactionId, stt })
+          voiceState.value = result.state
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: result.ok
+              ? `🎙️ Joined **${result.state.channelName ?? 'voice channel'}**. I'm listening.`
+              : `❌ ${result.error ?? 'Failed to join voice channel'}`,
+          })
+        }
+        catch (err: any) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: `❌ Failed to join voice channel: ${err?.message ?? 'unknown error'}`,
+          })
+        }
+      }
+      else if (payload.commandName === 'leave') {
+        if (!isElectron || !invokeVoiceLeaveByInteraction) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: 'Voice mode is only available in the Electron desktop build.',
+            ephemeral: true,
+          })
+          return
+        }
+
+        try {
+          const result = await invokeVoiceLeaveByInteraction({ interactionId: payload.interactionId })
+          voiceState.value = result.state
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: result.ok
+              ? '👋 Left the voice channel.'
+              : `❌ ${result.error ?? 'Failed to leave voice channel'}`,
+          })
+        }
+        catch (err: any) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: `❌ Failed to leave voice channel: ${err?.message ?? 'unknown error'}`,
+          })
+        }
+      }
       else {
         // Fallback for other commands not yet implemented
         await invokeReplyInteraction?.({
@@ -816,6 +1027,73 @@ export const useDiscordStore = defineStore('discord', () => {
     ipcRenderer.on(EVENT_LOG_CHANNEL, onEventLog)
     ipcRenderer.on(INBOUND_MESSAGE_CHANNEL, onInboundMessage)
     ipcRenderer.on(INTERACTION_CHANNEL, onInteraction)
+
+    // Voice channel listeners
+    const onVoiceStateChanged = (_event: any, state: DiscordVoiceState) => {
+      voiceState.value = state
+    }
+    const onVoiceTranscript = (_event: any, transcript: DiscordVoiceTranscript) => {
+      // Leadership: only Stage window owns voice → chat handover.
+      const hash = window.location.hash || '#/'
+      const isStage = hash === '#/' || hash.startsWith('#/stage')
+      if (!isStage)
+        return
+      if (!transcript?.text)
+        return
+
+      // Cache the user's text channel for outbound text fallback (rare, but handy
+      // if the bot wants to post a transcript or fall back from voice to text).
+      if (transcript.channelId)
+        lastChannelId.value = transcript.channelId
+
+      // Touch / upsert the user's voice profile so AIRI can call them by name.
+      // We only stamp `lastSeen`; the user can fill in `addressAs`/`notes` from
+      // the Discord settings page (or via a future `/profile` command).
+      const existingProfile = voiceUserProfiles.value[transcript.userId]
+      voiceUserProfiles.value = {
+        ...voiceUserProfiles.value,
+        [transcript.userId]: {
+          userId: transcript.userId,
+          displayName: transcript.displayName || transcript.username,
+          addressAs: existingProfile?.addressAs,
+          notes: existingProfile?.notes,
+          lastSeen: transcript.endedAt,
+        },
+      }
+
+      // Build a compact speaker preamble. We localize the scaffolding to Vietnamese
+      // because LLMs are sensitive to the language of surrounding context — a
+      // mostly-English wrapper around a Vietnamese transcript causes them to drift
+      // back to English on follow-up turns.
+      const profile = voiceUserProfiles.value[transcript.userId]
+      const addressAs = profile?.addressAs?.trim() || profile?.displayName || transcript.username
+      const speakerLine = profile?.notes?.trim()
+        ? `[Người nói: ${addressAs} (${transcript.userId.slice(-6)}). Ghi chú: ${profile.notes.trim()}]`
+        : `[Người nói: ${addressAs} (${transcript.userId.slice(-6)})]`
+
+      const directive = voiceReplyLanguagePrompt.value?.trim()
+      const directiveLine = directive ? `[Chỉ dẫn: ${directive}]` : ''
+
+      const formatted = [
+        directiveLine,
+        speakerLine,
+        `${addressAs} (qua voice) nói: ${transcript.text}`,
+      ].filter(Boolean).join('\n')
+
+      void chatOrchestrator.ingest(formatted, {
+        metadata: {
+          _discordSource: {
+            messageId: `voice-${transcript.endedAt}-${transcript.userId}`,
+            channelId: transcript.channelId,
+            userId: transcript.userId,
+            username: transcript.username,
+            isVoice: true,
+          },
+        },
+      })
+    }
+    ipcRenderer.on(VOICE_STATE_CHANNEL, onVoiceStateChanged)
+    ipcRenderer.on(VOICE_TRANSCRIPT_CHANNEL, onVoiceTranscript)
 
     const onBeforeSend = async (_message: string, options: any) => {
       // ── VERIFICATION LOGS ──
@@ -962,6 +1240,8 @@ export const useDiscordStore = defineStore('discord', () => {
       ipcRenderer.removeListener(EVENT_LOG_CHANNEL, onEventLog)
       ipcRenderer.removeListener(INBOUND_MESSAGE_CHANNEL, onInboundMessage)
       ipcRenderer.removeListener(INTERACTION_CHANNEL, onInteraction)
+      ipcRenderer.removeListener(VOICE_STATE_CHANNEL, onVoiceStateChanged)
+      ipcRenderer.removeListener(VOICE_TRANSCRIPT_CHANNEL, onVoiceTranscript)
       cleanupChatHooks.forEach(cleanup => cleanup())
       cleanupBackgroundHook()
     }
@@ -1000,6 +1280,38 @@ export const useDiscordStore = defineStore('discord', () => {
     }
   })
 
+  // Refresh voice state from main process whenever the service reconnects so we
+  // never start with a stale renderer-side cache.
+  watch(isConnected, async (connected) => {
+    if (!connected || !invokeVoiceGetState)
+      return
+    try {
+      voiceState.value = await invokeVoiceGetState()
+    }
+    catch { /* ignore */ }
+  })
+
+  // Push STT config to the main process whenever it changes so an active voice
+  // connection picks up new provider/model settings without rejoining.
+  watch(
+    () => [
+      hearingStore.activeTranscriptionProvider,
+      hearingStore.activeTranscriptionModel,
+      hearingStore.activeCustomModelName,
+      voiceSttLanguage.value,
+      voiceSttPrompt.value,
+    ],
+    () => {
+      if (!isElectron || !invokeVoiceUpdateSttConfig)
+        return
+      const stt = resolveSttConfig()
+      if (!stt)
+        return
+      void invokeVoiceUpdateSttConfig({ stt })
+    },
+    { deep: true },
+  )
+
   onUnmounted(() => {
     cleanupListeners?.()
   })
@@ -1009,12 +1321,20 @@ export const useDiscordStore = defineStore('discord', () => {
     enabled,
     token,
     configured,
+    voiceEnabled,
+    voiceMuteLocalTts,
+    voiceSttLanguage,
+    voiceSttPrompt,
+    voiceReplyLanguagePrompt,
+    voiceUserProfiles,
 
     // Live State
     serviceStatus,
     isConnected,
     isConnecting,
     eventLog,
+    voiceState,
+    isVoiceConnected,
 
     // Actions
     startService,
@@ -1028,5 +1348,32 @@ export const useDiscordStore = defineStore('discord', () => {
     clearAudioTurn,
     clearEventLog,
     resetState,
+    leaveVoice: async () => {
+      if (!invokeVoiceLeave)
+        return
+      voiceState.value = await invokeVoiceLeave()
+    },
+    /**
+     * Update or create a per-user voice profile. Use this to teach AIRI how to
+     * address a specific Discord user and what to remember about them.
+     */
+    upsertVoiceProfile(userId: string, patch: Partial<{ displayName: string, addressAs: string, notes: string }>) {
+      const existing = voiceUserProfiles.value[userId]
+      voiceUserProfiles.value = {
+        ...voiceUserProfiles.value,
+        [userId]: {
+          userId,
+          displayName: patch.displayName ?? existing?.displayName ?? userId,
+          addressAs: patch.addressAs ?? existing?.addressAs,
+          notes: patch.notes ?? existing?.notes,
+          lastSeen: existing?.lastSeen ?? Date.now(),
+        },
+      }
+    },
+    deleteVoiceProfile(userId: string) {
+      const next = { ...voiceUserProfiles.value }
+      delete next[userId]
+      voiceUserProfiles.value = next
+    },
   }
 })

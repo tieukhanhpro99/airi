@@ -517,8 +517,15 @@ async function playFunction(item: Parameters<Parameters<typeof createPlaybackMan
   currentAudioSource.value = source
   source.buffer = item.audio
 
+  // Mute local speaker output while AIRI is in a Discord voice channel and the
+  // user has opted in to "mute local TTS while in voice". The bot still emits
+  // audio via the main-process AudioPlayer, and we keep the analyser/lip-sync
+  // connections so the VRM/Live2D mouth tracks the bot's voice.
+  const muteLocalForVoice = !!(discordStore.voiceMuteLocalTts && discordStore.isVoiceConnected)
+
   // Ensure connections are robust
-  source.connect(audioContext.destination)
+  if (!muteLocalForVoice)
+    source.connect(audioContext.destination)
   if (audioAnalyser.value)
     source.connect(audioAnalyser.value)
 
