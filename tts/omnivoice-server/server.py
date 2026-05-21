@@ -35,7 +35,7 @@ import torch
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from voice_refs import SUPPORTED_REF_AUDIO_EXTS, list_voice_references
+from voice_refs import list_voice_references, resolve_voice_reference
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tts-server")
@@ -105,32 +105,16 @@ def _resolve_ref_audio(voice: str) -> tuple[str | None, str | None]:
         if not name:
             return REF_AUDIO_PATH, REF_TEXT
 
-        # Look for <name> with any supported reference audio extension in REF_DIR.
-        audio_path = None
-        for ext in SUPPORTED_REF_AUDIO_EXTS:
-            candidate = os.path.join(REF_DIR, f"{name}{ext}")
-            if os.path.exists(candidate):
-                audio_path = candidate
-                break
-            # Try original case from user input
-            candidate = os.path.join(REF_DIR, f"{voice.split(':', 1)[1].strip()}{ext}")
-            if os.path.exists(candidate):
-                audio_path = candidate
-                break
-
-        if not audio_path:
+        resolved = resolve_voice_reference(REF_DIR, name)
+        if not resolved:
             logger.warning(f"Reference audio not found for '{name}' in {REF_DIR}")
             return None, None
 
-        # Load companion text file (same name, .txt extension)
-        base_no_ext = os.path.splitext(audio_path)[0]
-        txt_path = f"{base_no_ext}.txt"
-        txt = ""
-        if os.path.exists(txt_path):
-            with open(txt_path, "r", encoding="utf-8") as f:
-                txt = f.read().strip()
+        return str(resolved["audio_path"]), str(resolved["ref_text"])
 
-        return audio_path, txt
+    resolved = resolve_voice_reference(REF_DIR, voice)
+    if resolved:
+        return str(resolved["audio_path"]), str(resolved["ref_text"])
 
     return None, None
 
@@ -353,8 +337,10 @@ def _generate_omnivoice(request: SpeechRequest) -> np.ndarray:
         kwargs["ref_audio"] = ref_audio
         if ref_text:
             kwargs["ref_text"] = ref_text
+        logger.info(f"[omnivoice] Using ref_audio={ref_audio} ref_text={bool(ref_text)} voice={request.voice}")
     elif instruct:
         kwargs["instruct"] = instruct
+        logger.info(f"[omnivoice] Using voice design instruct={instruct!r}")
 
     audio_arrays = _omnivoice_instance.generate(**kwargs)
 
@@ -380,6 +366,7 @@ def _generate_vieneu(request: SpeechRequest) -> np.ndarray:
     # where encode_reference() calls codec.encode_code() which was renamed.
     if ref_audio and os.path.exists(ref_audio):
         try:
+            logger.info(f"[vieneu] Using ref_audio={ref_audio} ref_text={bool(ref_text)} voice={request.voice}")
             voice_data = _vieneu_instance.encode_reference(ref_audio)
             kwargs["voice"] = voice_data
             if ref_text and _active_model_key == "vieneu-standard":
