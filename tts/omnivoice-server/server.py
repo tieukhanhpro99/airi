@@ -56,6 +56,12 @@ REF_TEXT = os.environ.get("TTS_REF_TEXT", "")
 NUM_STEPS = int(os.environ.get("TTS_NUM_STEPS", "16"))
 VIENEU_EMOTION = os.environ.get("TTS_VIENEU_EMOTION", "natural")
 
+# Directory containing all reference audio files for multi-voice cloning.
+# Convention: place <name>.wav + <name>.txt pairs in this folder.
+# Then use voice="clone:<name>" in the request to clone that specific voice.
+# voice="clone" (no suffix) uses the default ref audio (TTS_REF_AUDIO).
+REF_DIR = os.environ.get("TTS_REF_DIR", "/app/ref")
+
 # ── Model Registry ────────────────────────────────────────────────────────────
 
 MODEL_REGISTRY = {
@@ -68,6 +74,58 @@ MODEL_REGISTRY = {
 }
 
 # ── Runtime State ─────────────────────────────────────────────────────────────
+
+def _resolve_ref_audio(voice: str) -> tuple[str | None, str | None]:
+    """
+    Resolve reference audio path + text from the voice field.
+
+    Supported formats:
+      - "clone"          → default ref (TTS_REF_AUDIO / me.wav)
+      - "clone:kaguya"   → /app/ref/kaguya.wav + /app/ref/kaguya.txt
+      - "clone:friend"   → /app/ref/friend.wav + /app/ref/friend.txt
+      - anything else    → not a clone request, return (None, None)
+
+    Returns (audio_path, ref_text) or (None, None) if not a clone request.
+    """
+    if not voice:
+        return None, None
+
+    v = voice.strip().lower()
+
+    if v == "clone":
+        # Default ref
+        txt = REF_TEXT
+        if not txt:
+            txt_path = REF_AUDIO_PATH.replace(".wav", ".txt")
+            if os.path.exists(txt_path):
+                with open(txt_path, "r", encoding="utf-8") as f:
+                    txt = f.read().strip()
+        return REF_AUDIO_PATH, txt
+
+    if v.startswith("clone:"):
+        name = voice.split(":", 1)[1].strip()
+        if not name:
+            return REF_AUDIO_PATH, REF_TEXT
+
+        # Look for <name>.wav in REF_DIR
+        audio_path = os.path.join(REF_DIR, f"{name}.wav")
+        if not os.path.exists(audio_path):
+            # Try original case
+            audio_path = os.path.join(REF_DIR, f"{voice.split(':', 1)[1].strip()}.wav")
+        if not os.path.exists(audio_path):
+            logger.warning(f"Reference audio not found: {audio_path}")
+            return None, None
+
+        # Load companion text file
+        txt_path = audio_path.replace(".wav", ".txt")
+        txt = ""
+        if os.path.exists(txt_path):
+            with open(txt_path, "r", encoding="utf-8") as f:
+                txt = f.read().strip()
+
+        return audio_path, txt
+
+    return None, None
 
 _active_engine: str = ""  # "omnivoice" or "vieneu"
 _active_model_key: str = ""
@@ -201,6 +259,24 @@ async def list_models():
     }
 
 
+@app.get("/v1/voices")
+async def list_voices():
+    """List available voice clone references (files in REF_DIR)."""
+    voices = []
+    if os.path.isdir(REF_DIR):
+        for f in sorted(os.listdir(REF_DIR)):
+            if f.endswith(".wav"):
+                name = f[:-4]  # strip .wav
+                txt_path = os.path.join(REF_DIR, f"{name}.txt")
+                has_text = os.path.exists(txt_path)
+                voices.append({
+                    "id": f"clone:{name}",
+                    "name": name,
+                    "has_reference_text": has_text,
+                })
+    return {"data": voices}
+
+
 @app.post("/v1/audio/speech")
 async def create_speech(request: SpeechRequest):
     if not request.input or not request.input.strip():
@@ -259,14 +335,18 @@ async def create_speech(request: SpeechRequest):
 
 def _generate_omnivoice(request: SpeechRequest) -> np.ndarray:
     """Generate audio using OmniVoice engine."""
-    ref_audio = request.ref_audio or REF_AUDIO_PATH
-    ref_text = request.ref_text or REF_TEXT
+    ref_audio, ref_text = _resolve_ref_audio(request.voice)
     instruct = None
 
-    if request.voice and request.voice != "clone":
+    # If not a clone request, check if it's a voice design instruction
+    if ref_audio is None and request.voice and request.voice not in ("default", ""):
         instruct = request.voice
-        ref_audio = None
-        ref_text = None
+
+    # Allow explicit override via request fields
+    if request.ref_audio:
+        ref_audio = request.ref_audio
+    if request.ref_text:
+        ref_text = request.ref_text
 
     kwargs = {
         "text": request.input,
@@ -291,38 +371,45 @@ def _generate_omnivoice(request: SpeechRequest) -> np.ndarray:
 
 def _generate_vieneu(request: SpeechRequest) -> np.ndarray:
     """Generate audio using VieNeu-TTS engine."""
-    ref_audio = request.ref_audio or REF_AUDIO_PATH
-    ref_text = request.ref_text or REF_TEXT
-
     kwargs = {"text": request.input}
 
-    # Voice cloning
-    if request.voice == "clone" and ref_audio and os.path.exists(ref_audio):
-        voice_data = _vieneu_instance.encode_reference(ref_audio)
-        kwargs["voice"] = voice_data
-        # VieNeu standard mode needs ref_text for cloning; turbo doesn't
-        if ref_text and _active_model_key == "vieneu-standard":
-            kwargs["ref_text"] = ref_text
-    elif request.voice and request.voice != "clone" and request.voice != "default":
-        # Try to use as preset voice name
+    ref_audio, ref_text = _resolve_ref_audio(request.voice)
+
+    # Allow explicit override
+    if request.ref_audio:
+        ref_audio = request.ref_audio
+    if request.ref_text:
+        ref_text = request.ref_text
+
+    # Voice cloning — wrap in try/except because VieNeu 2.7.0 has a known bug
+    # where encode_reference() calls codec.encode_code() which was renamed.
+    if ref_audio and os.path.exists(ref_audio):
         try:
-            voices = _vieneu_instance.list_preset_voices()
-            match = next((v for desc, v in voices if v == request.voice or desc == request.voice), None)
-            if match:
-                kwargs["voice"] = _vieneu_instance.get_preset_voice(match)
-        except Exception:
-            pass
+            voice_data = _vieneu_instance.encode_reference(ref_audio)
+            kwargs["voice"] = voice_data
+            if ref_text and _active_model_key == "vieneu-standard":
+                kwargs["ref_text"] = ref_text
+        except (AttributeError, Exception) as e:
+            logger.warning(f"VieNeu voice cloning failed ({e}), using default voice")
+    elif request.voice and request.voice not in ("clone", "default", ""):
+        # Not a clone request — try preset voice name
+        if not request.voice.startswith("clone:"):
+            try:
+                voices = _vieneu_instance.list_preset_voices()
+                match = next((v for desc, v in voices if v == request.voice or desc == request.voice), None)
+                if match:
+                    kwargs["voice"] = _vieneu_instance.get_preset_voice(match)
+            except Exception:
+                pass
 
     audio = _vieneu_instance.infer(**kwargs)
 
     if audio is None:
         raise HTTPException(status_code=500, detail="VieNeu returned empty audio")
 
-    # VieNeu returns numpy array at 24kHz
     if isinstance(audio, np.ndarray):
         return audio
 
-    # Some versions return bytes or other formats
     return np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32767.0
 
 

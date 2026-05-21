@@ -29,9 +29,9 @@ services:
     ports:
       - "8100:8100"
     volumes:
-      # Reference audio for voice cloning
-      - ./me.wav:/app/ref/me.wav:ro
-      - ./me.txt:/app/ref/me.txt:ro
+      # Mount entire ref folder for multi-voice cloning
+      # Place <name>.wav + <name>.txt pairs here, use voice="clone:<name>"
+      - ./ref:/app/ref:ro
       # Persist model downloads across container restarts
       - tts-hf-cache:/root/.cache/huggingface
       - tts-vieneu-cache:/root/.cache/vieneu
