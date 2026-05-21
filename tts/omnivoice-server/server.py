@@ -67,9 +67,6 @@ REF_DIR = os.environ.get("TTS_REF_DIR", "/app/ref")
 MODEL_REGISTRY = {
     "omnivoice": {"type": "omnivoice", "hf_id": "k2-fsa/OmniVoice"},
     "khanhtts": {"type": "omnivoice", "hf_id": "kjanh/KhanhTTS-OmniVoice"},
-    "khanhtts-omnivoice": {"type": "omnivoice", "hf_id": "kjanh/KhanhTTS-OmniVoice"},
-    "vieneu": {"type": "vieneu", "mode": "standard"},
-    "vieneu-standard": {"type": "vieneu", "mode": "standard"},
     "vieneu-turbo": {"type": "vieneu", "mode": "turbo"},
 }
 
