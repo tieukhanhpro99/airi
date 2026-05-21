@@ -1,3 +1,4 @@
+import type { Buffer } from 'node:buffer'
 import type { Readable } from 'node:stream'
 
 import type { AudioPlayer, VoiceConnection, VoiceConnectionState } from '@discordjs/voice'
@@ -12,7 +13,6 @@ import type {
   GuildMember,
 } from 'discord.js'
 
-import { Buffer } from 'node:buffer'
 import { EventEmitter } from 'node:events'
 import { pipeline } from 'node:stream'
 
@@ -29,16 +29,9 @@ import {
 import { useLogg } from '@guiiai/logg'
 
 import { DECODE_SAMPLE_RATE } from '../../../constants/audio'
-import { openaiTranscribe } from '../../../pipelines/tts'
-import { convertOpusToWav } from '../../../utils/audio'
-import { AudioMonitor } from '../../../utils/audio-monitor'
+import { BargeInDetector } from '../../../utils/barge-in-detector'
 import { OpusDecoder } from '../../../utils/opus'
-
-function isValidTranscription(text: string): boolean {
-  if (!text || text.includes('[BLANK_AUDIO]'))
-    return false
-  return true
-}
+import { StreamingTranscriber } from '../../../utils/streaming-transcriber'
 
 async function setSelfVoice(logger: Logg, me?: GuildMember | null) {
   if (me?.voice && me.permissions.has('DeafenMembers')) {
@@ -52,32 +45,17 @@ async function setSelfVoice(logger: Logg, me?: GuildMember | null) {
   }
 }
 
-// eliza/packages/client-discord/src/voice.ts at develop · elizaOS/eliza
-// https://github.com/elizaOS/eliza/blob/develop/packages/client-discord/src/voice.ts
-
 export class VoiceManager extends EventEmitter {
   private logger = useLogg('VoiceManager').useGlobalConfig()
   private processingVoice: boolean = false
-  private transcriptionTimeout: NodeJS.Timeout | null = null
-  private userStates: Map<
-    string,
-    {
-      buffers: Buffer[]
-      totalLength: number
-      lastActive: number
-      transcriptionText: string
-    }
-  > = new Map()
 
   private activeAudioPlayer: AudioPlayer | null = null
+  private bargeInDetector = new BargeInDetector()
   private client: DiscordClient
   private airiClient: AiriClient
   private streams: Map<string, Readable> = new Map()
   private connections: Map<string, VoiceConnection> = new Map()
-  private activeMonitors: Map<
-    string,
-    { channel: BaseGuildVoiceChannel, monitor: AudioMonitor }
-  > = new Map()
+  private transcribers: Map<string, StreamingTranscriber> = new Map()
 
   // Track the text channel where the summon command was called, per guild.
   private textChannels: Map<string, string> = new Map()
@@ -172,9 +150,12 @@ export class VoiceManager extends EventEmitter {
     if (oldConnection) {
       try {
         oldConnection.destroy()
-        // Remove all associated streams and monitors
+        // Remove all associated streams and transcribers
         this.streams.clear()
-        this.activeMonitors.clear()
+        for (const [id, transcriber] of this.transcribers) {
+          transcriber.destroy()
+          this.transcribers.delete(id)
+        }
       }
       catch (error) {
         this.logger.withError(error).log('Error leaving voice channel')
@@ -260,68 +241,104 @@ export class VoiceManager extends EventEmitter {
     }
 
     const opusDecoder = new OpusDecoder(DECODE_SAMPLE_RATE, 1)
-    const volumeBuffer: number[] = []
-    const VOLUME_WINDOW_SIZE = 30
-    const SPEAKING_THRESHOLD = 0.05
 
-    const dataHandler = (pcmData: Buffer) => {
-      // Monitor the audio volume while the agent is speaking.
-      // If the average volume of the user's audio exceeds the defined threshold, it indicates active speaking.
-      // When active speaking is detected, stop the agent's current audio playback to avoid overlap.
-
+    // ── Barge-in: detect user speaking over bot's TTS playback ───────────
+    const bargeInHandler = (pcmData: Buffer) => {
       if (this.activeAudioPlayer) {
-        const samples = new Int16Array(pcmData.buffer, pcmData.byteOffset, pcmData.length / 2)
-        const maxAmplitude = Math.max(...samples.map(Math.abs)) / 32768
-        volumeBuffer.push(maxAmplitude)
-
-        if (volumeBuffer.length > VOLUME_WINDOW_SIZE) {
-          volumeBuffer.shift()
-        }
-
-        const avgVolume
-          = volumeBuffer.reduce((sum, v) => sum + v, 0) / VOLUME_WINDOW_SIZE
-
-        if (avgVolume > SPEAKING_THRESHOLD) {
-          volumeBuffer.length = 0
+        const triggered = this.bargeInDetector.process(pcmData)
+        if (triggered) {
+          this.logger.log(`Barge-in from ${member.displayName} — stopping playback`)
           this.cleanupAudioPlayer(this.activeAudioPlayer)
           this.processingVoice = false
+          // Notify AIRI that the response was interrupted
+          this.emit('barge-in', { userId, displayName: member.displayName })
         }
       }
+      else {
+        // Reset detector state when bot is not playing
+        this.bargeInDetector.reset()
+      }
     }
+
+    // ── Streaming STT: send audio chunks to speaches in realtime ─────────
+    const guildId = member.guild.id
+    const transcriber = new StreamingTranscriber({
+      onTranscript: (text) => {
+        // Use the text channel where /summon was called, fallback to voice channel
+        const targetChannelId = (guildId && this.textChannels.has(guildId))
+          ? this.textChannels.get(guildId)!
+          : channelId
+
+        const discordContext = {
+          channelId: targetChannelId,
+          guildId,
+          guildMember: member,
+        } satisfies Discord
+
+        this.logger.log(`[StreamingSTT] "${text}" from ${member.displayName}`)
+
+        this.airiClient.send({
+          type: 'input:text:voice',
+          data: { transcription: text, discord: discordContext },
+        })
+
+        this.airiClient.send({
+          type: 'input:text',
+          data: { text, discord: discordContext },
+        })
+      },
+      onSpeechStart: () => {
+        // If bot is playing and user starts speaking, the barge-in handler
+        // will take care of stopping playback. Here we just log.
+        this.logger.log(`Speech start: ${member.displayName}`)
+      },
+      onSpeechEnd: () => {
+        this.logger.log(`Speech end: ${member.displayName}`)
+      },
+    })
+
+    // Store transcriber for cleanup
+    this.transcribers.set(userId, transcriber)
 
     this.streams.set(userId, opusDecoder)
     this.connections.set(userId, connection as VoiceConnection)
 
+    // Wire up barge-in detection on every PCM frame
+    opusDecoder.on('data', bargeInHandler)
+
+    // Attach streaming transcriber to the decoded PCM stream
+    transcriber.attach(opusDecoder)
+
     const errorHandler = err => this.logger.withError(err).error('Opus decoding error')
     const streamCloseHandler = () => {
       this.logger.withField('displayName', member?.displayName).log('Voice stream closed')
-
       this.streams.delete(userId)
       this.connections.delete(userId)
+      this.transcribers.get(userId)?.destroy()
+      this.transcribers.delete(userId)
     }
     const closeHandler = () => {
       this.logger.withField('displayName', member?.displayName).log('Opus decoder closed')
-
-      opusDecoder.removeListener('data', dataHandler)
+      opusDecoder.removeListener('data', bargeInHandler)
       opusDecoder.removeListener('error', errorHandler)
       opusDecoder.removeListener('close', closeHandler)
       receiveStream?.removeListener('close', streamCloseHandler)
     }
 
-    opusDecoder.on('data', dataHandler)
     opusDecoder.on('error', errorHandler)
     opusDecoder.on('close', closeHandler)
     receiveStream?.on('close', streamCloseHandler)
 
     pipeline(receiveStream, opusDecoder, (err) => {
-      this.logger.withError(err).error('Opus decoding pipeline error')
-      if (err.message.includes('memory access out of bounds')) {
-        throw err
+      if (err) {
+        this.logger.withError(err).error('Opus decoding pipeline error')
+        if (err.message.includes('memory access out of bounds')) {
+          throw err
+        }
       }
     })
 
-    this.logger.log(`Monitoring user: ${member.displayName}`)
-    await this.handleUserStream(userId, member, member.guild.id, channelId, opusDecoder)
+    this.logger.log(`Monitoring user: ${member.displayName} (streaming STT + barge-in)`)
   }
 
   leaveChannel(channel: BaseGuildVoiceChannel) {
@@ -342,177 +359,14 @@ export class VoiceManager extends EventEmitter {
       this.connections.delete(channel.id)
     }
 
-    // Stop monitoring all members in this channel
-    for (const [memberId, monitorInfo] of this.activeMonitors) {
-      if (monitorInfo.channel.id === channel.id && memberId !== this.client.user?.id) {
-        this.stopMonitoringMember(memberId)
-      }
+    // Destroy all transcribers and streams
+    for (const [memberId, transcriber] of this.transcribers) {
+      transcriber.destroy()
+      this.transcribers.delete(memberId)
     }
+    this.streams.clear()
 
     this.logger.log(`Left voice channel: ${channel.name} (${channel.id})`)
-  }
-
-  stopMonitoringMember(memberId: string) {
-    const monitorInfo = this.activeMonitors.get(memberId)
-    if (!monitorInfo) {
-      return
-    }
-
-    monitorInfo.monitor.stop()
-    this.activeMonitors.delete(memberId)
-    this.streams.delete(memberId)
-    this.logger.log(`Stopped monitoring user ${memberId}`)
-  }
-
-  async debouncedProcessTranscription(
-    userId: string,
-    member: GuildMember,
-    guildId: string,
-    channelId: string,
-  ) {
-    const DEBOUNCE_TRANSCRIPTION_THRESHOLD = 1500 // wait for 1.5 seconds of silence
-
-    if (this.activeAudioPlayer?.state?.status === 'idle') {
-      this.logger.log('Cleaning up idle audio player.')
-      this.cleanupAudioPlayer(this.activeAudioPlayer)
-    }
-    if (this.activeAudioPlayer || this.processingVoice) {
-      const state = this.userStates.get(userId)
-      if (state) {
-        state.buffers.length = 0
-        state.totalLength = 0
-      }
-      return
-    }
-    if (this.transcriptionTimeout) {
-      clearTimeout(this.transcriptionTimeout)
-    }
-
-    this.transcriptionTimeout = setTimeout(async () => {
-      this.processingVoice = true
-      try {
-        await this.processTranscription(userId, member, guildId, channelId)
-        // Clean all users' previous buffers
-        this.userStates.forEach((state, _) => {
-          state.buffers.length = 0
-          state.totalLength = 0
-        })
-      }
-      finally {
-        this.processingVoice = false
-      }
-    }, DEBOUNCE_TRANSCRIPTION_THRESHOLD)
-  }
-
-  private async handleUserStream(
-    userId: string,
-    member: GuildMember,
-    guildId: string,
-    channelId: string,
-    audioStream: Readable,
-  ) {
-    this.logger.log(`Starting audio monitor for user: ${userId}`)
-
-    if (!this.userStates.has(userId)) {
-      this.userStates.set(userId, {
-        buffers: [],
-        totalLength: 0,
-        lastActive: Date.now(),
-        transcriptionText: '',
-      })
-    }
-
-    const state = this.userStates.get(userId)
-
-    const processBuffer = async (buffer: Buffer) => {
-      try {
-        state!.buffers.push(buffer)
-        state!.totalLength += buffer.length
-        state!.lastActive = Date.now()
-
-        this.debouncedProcessTranscription(userId, member, guildId, channelId)
-      }
-      catch (error) {
-        this.logger.withError(error).withField('userId', userId).error('Error processing buffer')
-      }
-    }
-
-    const _ = new AudioMonitor(
-      audioStream,
-      10000000,
-      () => {
-        if (this.transcriptionTimeout)
-          clearTimeout(this.transcriptionTimeout)
-      },
-      async (buffer) => {
-        if (!buffer) {
-          this.logger.error('Received empty buffer')
-          return
-        }
-
-        await processBuffer(buffer)
-      },
-    )
-  }
-
-  private async processTranscription(
-    userId: string,
-    member: GuildMember,
-    guildId: string,
-    channelId: string,
-  ) {
-    const state = this.userStates.get(userId)
-    if (!state || state.buffers.length === 0)
-      return
-
-    try {
-      const inputBuffer = Buffer.concat(state.buffers, state.totalLength)
-
-      state.buffers.length = 0 // Clear the buffers
-      state.totalLength = 0
-
-      // Convert Opus to WAV
-      const wavBuffer = await convertOpusToWav(inputBuffer)
-      const result = await openaiTranscribe(wavBuffer)
-      const transcriptionText = result
-
-      if (transcriptionText && isValidTranscription(transcriptionText)) {
-        state.transcriptionText += transcriptionText
-
-        // Use the text channel where /summon was called, fallback to current channelId (likely voice)
-        const targetChannelId = (guildId && this.textChannels.has(guildId))
-          ? this.textChannels.get(guildId)!
-          : channelId
-
-        const discordContext = {
-          channelId: targetChannelId,
-          guildId,
-          guildMember: member,
-        } satisfies Discord
-
-        this.logger.log(`Sending transcription to AIRI: "${transcriptionText}" (Target Channel: ${targetChannelId})`)
-
-        this.airiClient.send({
-          type: 'input:text:voice',
-          data: { transcription: transcriptionText, discord: discordContext },
-        })
-
-        this.airiClient.send({
-          type: 'input:text',
-          data: { text: transcriptionText, discord: discordContext },
-        })
-      }
-      if (state.transcriptionText.length) {
-        this.cleanupAudioPlayer(this.activeAudioPlayer)
-        const finalText = state.transcriptionText
-        state.transcriptionText = ''
-
-        this.logger.withField('transcription', finalText).log('Transcription complete')
-      }
-    }
-    catch (error) {
-      this.logger.withError(error).withField('userId', userId).error('Error processing transcription')
-    }
   }
 
   async playAudioStream(userId: string, audioStream: Readable) {
