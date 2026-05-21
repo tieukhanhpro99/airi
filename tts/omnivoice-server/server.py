@@ -104,17 +104,26 @@ def _resolve_ref_audio(voice: str) -> tuple[str | None, str | None]:
         if not name:
             return REF_AUDIO_PATH, REF_TEXT
 
-        # Look for <name>.wav in REF_DIR
-        audio_path = os.path.join(REF_DIR, f"{name}.wav")
-        if not os.path.exists(audio_path):
-            # Try original case
-            audio_path = os.path.join(REF_DIR, f"{voice.split(':', 1)[1].strip()}.wav")
-        if not os.path.exists(audio_path):
-            logger.warning(f"Reference audio not found: {audio_path}")
+        # Look for <name>.wav or <name>.mp3 in REF_DIR
+        audio_path = None
+        for ext in (".wav", ".mp3", ".flac", ".ogg"):
+            candidate = os.path.join(REF_DIR, f"{name}{ext}")
+            if os.path.exists(candidate):
+                audio_path = candidate
+                break
+            # Try original case from user input
+            candidate = os.path.join(REF_DIR, f"{voice.split(':', 1)[1].strip()}{ext}")
+            if os.path.exists(candidate):
+                audio_path = candidate
+                break
+
+        if not audio_path:
+            logger.warning(f"Reference audio not found for '{name}' in {REF_DIR}")
             return None, None
 
-        # Load companion text file
-        txt_path = audio_path.replace(".wav", ".txt")
+        # Load companion text file (same name, .txt extension)
+        base_no_ext = os.path.splitext(audio_path)[0]
+        txt_path = f"{base_no_ext}.txt"
         txt = ""
         if os.path.exists(txt_path):
             with open(txt_path, "r", encoding="utf-8") as f:
