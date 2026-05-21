@@ -478,12 +478,12 @@ const contextPercentage = computed(() => {
 
 onMounted(() => {
   updateWindowTitle()
-  
+
   const savedDraft = localStorage.getItem('airi-chatbox-draft')
   if (savedDraft) {
     messageInput.value = savedDraft
   }
-  
+
   textJournalStore.load()
   shortTermMemory.load()
   echoesStore.load()
@@ -503,7 +503,7 @@ let throttleTimeout: ReturnType<typeof setTimeout> | null = null
 
 watch(messageInput, (newVal) => {
   updateWindowTitle()
-  
+
   const now = Date.now()
   const timeSinceLastSave = now - lastSaveTime
 

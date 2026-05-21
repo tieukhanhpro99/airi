@@ -7,6 +7,7 @@ import { listModels } from '@xsai/model'
 import { streamText } from '@xsai/stream-text'
 import { defineStore } from 'pinia'
 import { toRaw } from 'vue'
+
 import { useSettingsChat } from './settings/chat'
 
 export type StreamEvent
@@ -102,7 +103,7 @@ export function sanitizeMessages(messages: unknown[], options?: { vision?: boole
 
 function combineSystemMessagesIfNeeded(messages: Message[], chatConfig: any, settingsChat: any): Message[] {
   const shouldCombine = settingsChat.combineSystemMessages || chatConfig.baseURL?.includes('googleapis.com')
-  
+
   if (!shouldCombine) {
     return messages
   }
@@ -114,32 +115,33 @@ function combineSystemMessagesIfNeeded(messages: Message[], chatConfig: any, set
 
   const personaMessages: Message[] = []
   const contextMessages: Message[] = []
-  
+
   for (const m of systemMessages) {
     const content = typeof m.content === 'string' ? m.content : ''
     const isContext = content.startsWith('These are the contextual information retrieved')
       || content.startsWith('[ENVIRONMENTAL AWARENESS]')
       || content.includes('[CONTEXT_AWARENESS]')
-      
+
     if (isContext) {
       contextMessages.push(m)
-    } else {
+    }
+    else {
       personaMessages.push(m)
     }
   }
-  
+
   const uniquePersonaContents = [...new Set(personaMessages.map(m => typeof m.content === 'string' ? m.content : ''))]
   const dedupedPersonaContent = uniquePersonaContents.join('\n\n')
-  
+
   const lastContextMessage = contextMessages[contextMessages.length - 1]
   const lastContextContent = lastContextMessage ? (typeof lastContextMessage.content === 'string' ? lastContextMessage.content : '') : ''
-  
+
   const combinedContent = [dedupedPersonaContent, lastContextContent].filter(Boolean).join('\n\n')
-  
+
   const nonSystemMessages = messages.filter(m => m.role !== 'system')
   return [
     { role: 'system', content: combinedContent } as Message,
-    ...nonSystemMessages
+    ...nonSystemMessages,
   ]
 }
 

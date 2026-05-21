@@ -17,7 +17,7 @@ const processedContent = ref('')
 const { process, processSync } = useMarkdown()
 
 function formatActorName(id: string): string {
-  let name = id.replace(/^(actress_|actor_)/i, '')
+  const name = id.replace(/^(actress_|actor_)/i, '')
   const customNames: Record<string, string> = {
     cg1: 'Nia',
     cg2: 'Vara',

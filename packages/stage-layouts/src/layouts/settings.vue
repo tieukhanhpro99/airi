@@ -4,13 +4,14 @@ import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
 import { useTheme } from '@proj-airi/ui'
 import { computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RouterView, useRoute } from 'vue-router'
+import { RouterView, useRoute, useRouter } from 'vue-router'
 
 import HeaderLink from '../components/Layouts/HeaderLink.vue'
 
 import { themeColorFromValue, useThemeColor } from '../composables/theme-color'
 
 const route = useRoute()
+const router = useRouter()
 const { isDark: dark } = useTheme()
 const { t } = useI18n()
 const providersStore = useProvidersStore()

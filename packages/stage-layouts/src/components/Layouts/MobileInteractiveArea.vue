@@ -13,22 +13,20 @@ import { useAiriCardStore } from '@proj-airi/stage-ui/stores/modules/airi-card'
 import { useConsciousnessStore } from '@proj-airi/stage-ui/stores/modules/consciousness'
 import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
 import { useSettings, useSettingsAudioDevice } from '@proj-airi/stage-ui/stores/settings'
-import { BasicTextarea, useTheme } from '@proj-airi/ui'
+import { BasicTextarea } from '@proj-airi/ui'
 import { useResizeObserver, useScreenSafeArea } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RouterLink, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 
 import IndicatorMicVolume from '../Widgets/IndicatorMicVolume.vue'
-import ActionAbout from './InteractiveArea/Actions/About.vue'
 import ActionViewControls from './InteractiveArea/Actions/ViewControls.vue'
 import ViewControlInputs from './ViewControls/Inputs.vue'
 
 import { BackgroundDialogPicker } from '../Backgrounds'
 
-const { isDark, toggleDark } = useTheme()
 const hearingDialogOpen = ref(false)
 const chatOrchestrator = useChatOrchestratorStore()
 const chatSession = useChatSessionStore()
@@ -40,10 +38,7 @@ const { streamingMessage } = storeToRefs(chatStream)
 const { sending } = storeToRefs(chatOrchestrator)
 const historyMessages = computed(() => messages.value as unknown as ChatHistoryItem[])
 
-const {
-  stageViewControlsEnabled,
-  stageViewControlsMode: viewControlsActiveMode,
-} = storeToRefs(useSettings())
+const { stageViewControlsEnabled } = storeToRefs(useSettings())
 const viewControlsInputsRef = useTemplateRef<InstanceType<typeof ViewControlInputs>>('viewControlsInputs')
 
 const messageInput = ref('')

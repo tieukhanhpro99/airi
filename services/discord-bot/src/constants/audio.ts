@@ -5,10 +5,10 @@ export const DECODE_SAMPLE_RATE = 16000
 // ── Barge-in Detection ───────────────────────────────────────────────────────
 
 /** RMS energy threshold to consider the user is actively speaking (0-1 scale). */
-export const BARGE_IN_RMS_THRESHOLD = 0.04
+export const BARGE_IN_RMS_THRESHOLD = 0.06
 
 /** Number of consecutive frames above threshold before triggering barge-in. */
-export const BARGE_IN_CONFIRM_FRAMES = 3
+export const BARGE_IN_CONFIRM_FRAMES = 4
 
 /** Cooldown (ms) after a barge-in before another can trigger. Prevents rapid re-triggers. */
 export const BARGE_IN_COOLDOWN_MS = 500

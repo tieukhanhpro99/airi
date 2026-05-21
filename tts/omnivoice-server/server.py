@@ -35,6 +35,7 @@ import torch
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from voice_refs import SUPPORTED_REF_AUDIO_EXTS, list_voice_references
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tts-server")
@@ -104,9 +105,9 @@ def _resolve_ref_audio(voice: str) -> tuple[str | None, str | None]:
         if not name:
             return REF_AUDIO_PATH, REF_TEXT
 
-        # Look for <name>.wav or <name>.mp3 in REF_DIR
+        # Look for <name> with any supported reference audio extension in REF_DIR.
         audio_path = None
-        for ext in (".wav", ".mp3", ".flac", ".ogg"):
+        for ext in SUPPORTED_REF_AUDIO_EXTS:
             candidate = os.path.join(REF_DIR, f"{name}{ext}")
             if os.path.exists(candidate):
                 audio_path = candidate
@@ -268,19 +269,7 @@ async def list_models():
 @app.get("/v1/voices")
 async def list_voices():
     """List available voice clone references (files in REF_DIR)."""
-    voices = []
-    if os.path.isdir(REF_DIR):
-        for f in sorted(os.listdir(REF_DIR)):
-            if f.endswith(".wav"):
-                name = f[:-4]  # strip .wav
-                txt_path = os.path.join(REF_DIR, f"{name}.txt")
-                has_text = os.path.exists(txt_path)
-                voices.append({
-                    "id": f"clone:{name}",
-                    "name": name,
-                    "has_reference_text": has_text,
-                })
-    return {"data": voices}
+    return {"data": list_voice_references(REF_DIR)}
 
 
 @app.post("/v1/audio/speech")

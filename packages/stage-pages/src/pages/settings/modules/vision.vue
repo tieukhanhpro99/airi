@@ -459,337 +459,338 @@ const pauseRemainingMinutes = computed(() => {
               <span v-else>Refresh</span>
             </button>
           </div>
-        <div text="neutral-400 dark:neutral-400">
-          <span>How should AIRI decide which screen(s) to capture?</span>
-        </div>
-      </div>
-
-      <!-- Source-mode radio: Predict / All / Specific. Mutually exclusive. -->
-      <div class="grid grid-cols-1 gap-2 md:grid-cols-3">
-        <label
-          :class="[
-            'flex cursor-pointer items-start gap-2 rounded-lg border-2 p-3 transition-all',
-            visionStore.predictMode
-              ? 'border-primary-500 bg-primary-500/10'
-              : 'border-neutral-200 dark:border-neutral-700',
-          ]"
-        >
-          <input
-            type="radio"
-            :checked="visionStore.predictMode"
-            class="mt-1 h-4 w-4 border-gray-300 text-primary-600"
-            @change="visionStore.predictMode = true; visionStore.captureAllScreens = false"
-          >
-          <div class="flex flex-col">
-            <span class="text-sm font-medium">🎯 Predict (auto)</span>
-            <span class="text-xs text-neutral-500">Tự pick màn hình bạn đang dùng (theo cửa sổ active, fallback chuột). Khuyến nghị cho multi-monitor.</span>
+          <div text="neutral-400 dark:neutral-400">
+            <span>How should AIRI decide which screen(s) to capture?</span>
           </div>
-        </label>
-
-        <label
-          :class="[
-            'flex cursor-pointer items-start gap-2 rounded-lg border-2 p-3 transition-all',
-            !visionStore.predictMode && visionStore.captureAllScreens
-              ? 'border-primary-500 bg-primary-500/10'
-              : 'border-neutral-200 dark:border-neutral-700',
-          ]"
-        >
-          <input
-            type="radio"
-            :checked="!visionStore.predictMode && visionStore.captureAllScreens"
-            class="mt-1 h-4 w-4 border-gray-300 text-primary-600"
-            @change="visionStore.predictMode = false; visionStore.captureAllScreens = true"
-          >
-          <div class="flex flex-col">
-            <span class="text-sm font-medium">🖥️ All monitors</span>
-            <span class="text-xs text-neutral-500">Capture mọi màn hình mỗi lần. Tốn token nhất nhưng AIRI thấy hết.</span>
-          </div>
-        </label>
-
-        <label
-          :class="[
-            'flex cursor-pointer items-start gap-2 rounded-lg border-2 p-3 transition-all',
-            !visionStore.predictMode && !visionStore.captureAllScreens
-              ? 'border-primary-500 bg-primary-500/10'
-              : 'border-neutral-200 dark:border-neutral-700',
-          ]"
-        >
-          <input
-            type="radio"
-            :checked="!visionStore.predictMode && !visionStore.captureAllScreens"
-            class="mt-1 h-4 w-4 border-gray-300 text-primary-600"
-            @change="visionStore.predictMode = false; visionStore.captureAllScreens = false"
-          >
-          <div class="flex flex-col">
-            <span class="text-sm font-medium">📌 Specific sources</span>
-            <span class="text-xs text-neutral-500">Pick chính xác monitor/cửa sổ bên dưới. Predict + All bị bỏ qua.</span>
-          </div>
-        </label>
-      </div>
-
-      <!-- Specific source picker: only meaningful when "Specific sources" mode is active. -->
-      <div v-if="!visionStore.predictMode && !visionStore.captureAllScreens" flex="~ col gap-3">
-        <div v-if="visionStore.availableSources.length === 0" class="text-sm text-neutral-500 italic">
-          No sources enumerated yet. Click <strong>Refresh</strong> to scan your displays and windows.
         </div>
 
-        <div v-else class="grid grid-cols-2 gap-3 lg:grid-cols-3">
-          <button
-            v-for="source in visionStore.availableSources"
-            :key="source.id"
-            type="button"
+        <!-- Source-mode radio: Predict / All / Specific. Mutually exclusive. -->
+        <div class="grid grid-cols-1 gap-2 md:grid-cols-3">
+          <label
             :class="[
-              'relative flex flex-col gap-2 rounded-xl border-2 p-2 text-left transition-all',
-              visionStore.selectedSourceIds.includes(source.id)
+              'flex cursor-pointer items-start gap-2 rounded-lg border-2 p-3 transition-all',
+              visionStore.predictMode
                 ? 'border-primary-500 bg-primary-500/10'
-                : 'border-neutral-200 bg-white hover:border-primary-300 dark:border-neutral-700 dark:bg-neutral-800',
+                : 'border-neutral-200 dark:border-neutral-700',
             ]"
-            @click="visionStore.toggleSourceSelection(source.id)"
           >
-            <img
-              v-if="source.thumbnailDataUrl"
-              :src="source.thumbnailDataUrl"
-              :alt="source.name"
-              class="aspect-video w-full rounded object-cover"
+            <input
+              type="radio"
+              :checked="visionStore.predictMode"
+              class="mt-1 h-4 w-4 border-gray-300 text-primary-600"
+              @change="visionStore.predictMode = true; visionStore.captureAllScreens = false"
             >
-            <div
-              v-else
-              class="aspect-video w-full flex items-center justify-center rounded bg-neutral-200 dark:bg-neutral-700"
+            <div class="flex flex-col">
+              <span class="text-sm font-medium">🎯 Predict (auto)</span>
+              <span class="text-xs text-neutral-500">Tự pick màn hình bạn đang dùng (theo cửa sổ active, fallback chuột). Khuyến nghị cho multi-monitor.</span>
+            </div>
+          </label>
+
+          <label
+            :class="[
+              'flex cursor-pointer items-start gap-2 rounded-lg border-2 p-3 transition-all',
+              !visionStore.predictMode && visionStore.captureAllScreens
+                ? 'border-primary-500 bg-primary-500/10'
+                : 'border-neutral-200 dark:border-neutral-700',
+            ]"
+          >
+            <input
+              type="radio"
+              :checked="!visionStore.predictMode && visionStore.captureAllScreens"
+              class="mt-1 h-4 w-4 border-gray-300 text-primary-600"
+              @change="visionStore.predictMode = false; visionStore.captureAllScreens = true"
             >
-              <div i-solar:gallery-bold-duotone class="text-3xl text-neutral-400" />
+            <div class="flex flex-col">
+              <span class="text-sm font-medium">🖥️ All monitors</span>
+              <span class="text-xs text-neutral-500">Capture mọi màn hình mỗi lần. Tốn token nhất nhưng AIRI thấy hết.</span>
             </div>
-            <div class="flex items-center gap-1">
-              <div
-                :class="[
-                  'shrink-0 text-base',
-                  source.type === 'screen' ? 'i-solar:monitor-bold-duotone' : 'i-solar:window-frame-bold-duotone',
-                ]"
-              />
-              <span class="truncate text-xs font-medium">{{ source.name }}</span>
+          </label>
+
+          <label
+            :class="[
+              'flex cursor-pointer items-start gap-2 rounded-lg border-2 p-3 transition-all',
+              !visionStore.predictMode && !visionStore.captureAllScreens
+                ? 'border-primary-500 bg-primary-500/10'
+                : 'border-neutral-200 dark:border-neutral-700',
+            ]"
+          >
+            <input
+              type="radio"
+              :checked="!visionStore.predictMode && !visionStore.captureAllScreens"
+              class="mt-1 h-4 w-4 border-gray-300 text-primary-600"
+              @change="visionStore.predictMode = false; visionStore.captureAllScreens = false"
+            >
+            <div class="flex flex-col">
+              <span class="text-sm font-medium">📌 Specific sources</span>
+              <span class="text-xs text-neutral-500">Pick chính xác monitor/cửa sổ bên dưới. Predict + All bị bỏ qua.</span>
             </div>
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── Operation Modes ──────────────────────────────────────────────────── -->
-    <div v-if="activeProvider && activeModel">
-      <div flex="~ col gap-4">
-        <div>
-          <h2 class="text-lg text-neutral-500 md:text-2xl dark:text-neutral-500">
-            Operation Modes
-          </h2>
-          <div text="neutral-400 dark:neutral-400">
-            <span>All modes here are <strong>gated by the Master Switch</strong> at the top. <code>/look</code> works whenever the master is on; the toggles below control AI's <em>automatic</em> capture behavior.</span>
-          </div>
-        </div>
-
-        <label class="flex cursor-pointer items-start gap-3 border border-neutral-200 rounded-lg p-3 dark:border-neutral-700">
-          <input v-model="visionStore.isWitnessEnabled" type="checkbox" class="mt-0.5 h-4 w-4 border-gray-300 rounded text-primary-600">
-          <div class="flex flex-col">
-            <span class="font-medium">Master Switch (Witness)</span>
-            <span class="text-xs text-neutral-500">Required to enable any automatic capture below. Off = on-demand only.</span>
-          </div>
-        </label>
-
-        <label
-          :class="[
-            'flex cursor-pointer items-start gap-3 rounded-lg border border-neutral-200 p-3 dark:border-neutral-700',
-            !visionStore.isWitnessEnabled && 'pointer-events-none opacity-50',
-          ]"
-        >
-          <input v-model="visionStore.smartEnabled" type="checkbox" class="mt-0.5 h-4 w-4 border-gray-300 rounded text-primary-600">
-          <div class="flex flex-col gap-1">
-            <span class="font-medium">Smart Mode (Active Window Trigger)</span>
-            <span class="text-xs text-neutral-500">Capture when you switch to a different application — debounced + cooldown so it doesn't fire on every alt-tab.</span>
-            <div v-if="visionStore.smartEnabled" class="mt-2 flex flex-col gap-2 text-xs">
-              <div class="flex flex-wrap gap-3">
-                <label class="flex items-center gap-1">
-                  Granularity
-                  <select
-                    v-model="visionStore.smartGranularity"
-                    class="rounded border border-neutral-300 bg-transparent px-1 py-0.5 text-xs dark:border-neutral-600"
-                  >
-                    <option value="process">App-only (recommended)</option>
-                    <option value="title">App + Title (sensitive)</option>
-                  </select>
-                </label>
-                <label class="flex items-center gap-1">
-                  Debounce (ms)
-                  <input
-                    v-model.number="visionStore.smartDebounceMs"
-                    type="number" min="500" step="500"
-                    class="w-20 border border-neutral-300 rounded bg-transparent px-1 py-0.5 dark:border-neutral-600"
-                  >
-                </label>
-                <label class="flex items-center gap-1">
-                  Cooldown (ms)
-                  <input
-                    v-model.number="visionStore.smartCooldownMs"
-                    type="number" min="5000" step="5000"
-                    class="w-24 border border-neutral-300 rounded bg-transparent px-1 py-0.5 dark:border-neutral-600"
-                  >
-                </label>
-              </div>
-              <div class="flex flex-col gap-1">
-                <span class="text-neutral-500">Apps to ignore as smart-mode destinations:</span>
-                <div class="flex flex-wrap gap-1">
-                  <span
-                    v-for="entry in visionStore.smartIgnoreApps"
-                    :key="entry"
-                    class="flex items-center gap-1 border border-neutral-200 rounded-full bg-neutral-100 px-2 py-0.5 dark:border-neutral-700 dark:bg-neutral-800"
-                  >
-                    <span>{{ entry }}</span>
-                    <button
-                      type="button"
-                      class="text-neutral-400 hover:text-red-500"
-                      @click="visionStore.smartIgnoreApps = visionStore.smartIgnoreApps.filter((e: string) => e !== entry)"
-                    >
-                      <div i-solar:close-circle-bold-duotone />
-                    </button>
-                  </span>
-                </div>
-              </div>
-              <p class="text-[10px] text-neutral-400">
-                Tip: cooldown 180000ms = 3 phút. Granularity "App-only" coi việc đổi tab/file trong cùng app là bình thường, không trigger.
-              </p>
-            </div>
-          </div>
-        </label>
-
-        <label
-          :class="[
-            'flex cursor-pointer items-start gap-3 rounded-lg border border-neutral-200 p-3 dark:border-neutral-700',
-            !visionStore.isWitnessEnabled && 'pointer-events-none opacity-50',
-          ]"
-        >
-          <input v-model="visionStore.periodicEnabled" type="checkbox" class="mt-0.5 h-4 w-4 border-gray-300 rounded text-primary-600">
-          <div class="flex flex-col gap-1">
-            <span class="font-medium">Periodic Mode (Interval)</span>
-            <span class="text-xs text-neutral-500">Capture at a fixed interval regardless of activity. Costs tokens consistently.</span>
-            <div v-if="visionStore.periodicEnabled" class="mt-2 flex items-center gap-2 text-xs">
-              <span>Every</span>
-              <input
-                v-model.number="visionStore.periodicIntervalMinutes"
-                type="number" min="1" max="120"
-                class="w-16 border border-neutral-300 rounded bg-transparent px-1 py-0.5 dark:border-neutral-600"
-              >
-              <span>minutes</span>
-            </div>
-          </div>
-        </label>
-
-        <div class="rounded-lg bg-neutral-50 p-3 text-xs text-neutral-600 dark:bg-neutral-800/40 dark:text-neutral-400">
-          <div class="mb-1 flex items-center gap-1 text-neutral-700 font-semibold dark:text-neutral-300">
-            <div i-solar:keyboard-bold-duotone /> Hotkeys (global)
-          </div>
-          <div><kbd class="rounded bg-neutral-200 px-1 dark:bg-neutral-700">Ctrl+Shift+V</kbd> — capture now (on-demand)</div>
-          <div><kbd class="rounded bg-neutral-200 px-1 dark:bg-neutral-700">Ctrl+Shift+P</kbd> — toggle 15-min pause</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── Privacy & Pause ──────────────────────────────────────────────────── -->
-    <div v-if="activeProvider && activeModel">
-      <div flex="~ col gap-4">
-        <div>
-          <h2 class="text-lg text-neutral-500 md:text-2xl dark:text-neutral-500">
-            Privacy
-          </h2>
-          <div text="neutral-400 dark:neutral-400">
-            <span>Block specific apps from being captured, or pause vision entirely.</span>
-          </div>
+          </label>
         </div>
 
-        <div
-          :class="[
-            'rounded-lg p-3 flex items-center justify-between',
-            visionStore.isPaused
-              ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300'
-              : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400',
-          ]"
-        >
-          <div class="flex items-center gap-2 text-sm font-medium">
-            <div :class="visionStore.isPaused ? 'i-solar:eye-closed-bold-duotone' : 'i-solar:eye-bold-duotone'" />
-            <span v-if="visionStore.isPaused">Paused — about {{ pauseRemainingMinutes }} min remaining</span>
-            <span v-else>Vision active</span>
+        <!-- Specific source picker: only meaningful when "Specific sources" mode is active. -->
+        <div v-if="!visionStore.predictMode && !visionStore.captureAllScreens" flex="~ col gap-3">
+          <div v-if="visionStore.availableSources.length === 0" class="text-sm text-neutral-500 italic">
+            No sources enumerated yet. Click <strong>Refresh</strong> to scan your displays and windows.
           </div>
-          <div class="flex items-center gap-2">
+
+          <div v-else class="grid grid-cols-2 gap-3 lg:grid-cols-3">
             <button
-              v-if="visionStore.isPaused"
+              v-for="source in visionStore.availableSources"
+              :key="source.id"
               type="button"
-              class="rounded bg-white px-2 py-1 text-xs text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
-              @click="visionStore.resumeNow()"
+              :class="[
+                'relative flex flex-col gap-2 rounded-xl border-2 p-2 text-left transition-all',
+                visionStore.selectedSourceIds.includes(source.id)
+                  ? 'border-primary-500 bg-primary-500/10'
+                  : 'border-neutral-200 bg-white hover:border-primary-300 dark:border-neutral-700 dark:bg-neutral-800',
+              ]"
+              @click="visionStore.toggleSourceSelection(source.id)"
             >
-              Resume now
+              <img
+                v-if="source.thumbnailDataUrl"
+                :src="source.thumbnailDataUrl"
+                :alt="source.name"
+                class="aspect-video w-full rounded object-cover"
+              >
+              <div
+                v-else
+                class="aspect-video w-full flex items-center justify-center rounded bg-neutral-200 dark:bg-neutral-700"
+              >
+                <div i-solar:gallery-bold-duotone class="text-3xl text-neutral-400" />
+              </div>
+              <div class="flex items-center gap-1">
+                <div
+                  :class="[
+                    'shrink-0 text-base',
+                    source.type === 'screen' ? 'i-solar:monitor-bold-duotone' : 'i-solar:window-frame-bold-duotone',
+                  ]"
+                />
+                <span class="truncate text-xs font-medium">{{ source.name }}</span>
+              </div>
             </button>
-            <template v-else>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Operation Modes ──────────────────────────────────────────────────── -->
+      <div v-if="activeProvider && activeModel">
+        <div flex="~ col gap-4">
+          <div>
+            <h2 class="text-lg text-neutral-500 md:text-2xl dark:text-neutral-500">
+              Operation Modes
+            </h2>
+            <div text="neutral-400 dark:neutral-400">
+              <span>All modes here are <strong>gated by the Master Switch</strong> at the top. <code>/look</code> works whenever the master is on; the toggles below control AI's <em>automatic</em> capture behavior.</span>
+            </div>
+          </div>
+
+          <label class="flex cursor-pointer items-start gap-3 border border-neutral-200 rounded-lg p-3 dark:border-neutral-700">
+            <input v-model="visionStore.isWitnessEnabled" type="checkbox" class="mt-0.5 h-4 w-4 border-gray-300 rounded text-primary-600">
+            <div class="flex flex-col">
+              <span class="font-medium">Master Switch (Witness)</span>
+              <span class="text-xs text-neutral-500">Required to enable any automatic capture below. Off = on-demand only.</span>
+            </div>
+          </label>
+
+          <label
+            :class="[
+              'flex cursor-pointer items-start gap-3 rounded-lg border border-neutral-200 p-3 dark:border-neutral-700',
+              !visionStore.isWitnessEnabled && 'pointer-events-none opacity-50',
+            ]"
+          >
+            <input v-model="visionStore.smartEnabled" type="checkbox" class="mt-0.5 h-4 w-4 border-gray-300 rounded text-primary-600">
+            <div class="flex flex-col gap-1">
+              <span class="font-medium">Smart Mode (Active Window Trigger)</span>
+              <span class="text-xs text-neutral-500">Capture when you switch to a different application — debounced + cooldown so it doesn't fire on every alt-tab.</span>
+              <div v-if="visionStore.smartEnabled" class="mt-2 flex flex-col gap-2 text-xs">
+                <div class="flex flex-wrap gap-3">
+                  <label class="flex items-center gap-1">
+                    Granularity
+                    <select
+                      v-model="visionStore.smartGranularity"
+                      class="border border-neutral-300 rounded bg-transparent px-1 py-0.5 text-xs dark:border-neutral-600"
+                    >
+                      <option value="process">App-only (recommended)</option>
+                      <option value="title">App + Title (sensitive)</option>
+                    </select>
+                  </label>
+                  <label class="flex items-center gap-1">
+                    Debounce (ms)
+                    <input
+                      v-model.number="visionStore.smartDebounceMs"
+                      type="number" min="500" step="500"
+                      class="w-20 border border-neutral-300 rounded bg-transparent px-1 py-0.5 dark:border-neutral-600"
+                    >
+                  </label>
+                  <label class="flex items-center gap-1">
+                    Cooldown (ms)
+                    <input
+                      v-model.number="visionStore.smartCooldownMs"
+                      type="number" min="5000" step="5000"
+                      class="w-24 border border-neutral-300 rounded bg-transparent px-1 py-0.5 dark:border-neutral-600"
+                    >
+                  </label>
+                </div>
+                <div class="flex flex-col gap-1">
+                  <span class="text-neutral-500">Apps to ignore as smart-mode destinations:</span>
+                  <div class="flex flex-wrap gap-1">
+                    <span
+                      v-for="entry in visionStore.smartIgnoreApps"
+                      :key="entry"
+                      class="flex items-center gap-1 border border-neutral-200 rounded-full bg-neutral-100 px-2 py-0.5 dark:border-neutral-700 dark:bg-neutral-800"
+                    >
+                      <span>{{ entry }}</span>
+                      <button
+                        type="button"
+                        class="text-neutral-400 hover:text-red-500"
+                        @click="visionStore.smartIgnoreApps = visionStore.smartIgnoreApps.filter((e: string) => e !== entry)"
+                      >
+                        <div i-solar:close-circle-bold-duotone />
+                      </button>
+                    </span>
+                  </div>
+                </div>
+                <p class="text-[10px] text-neutral-400">
+                  Tip: cooldown 180000ms = 3 phút. Granularity "App-only" coi việc đổi tab/file trong cùng app là bình thường, không trigger.
+                </p>
+              </div>
+            </div>
+          </label>
+
+          <label
+            :class="[
+              'flex cursor-pointer items-start gap-3 rounded-lg border border-neutral-200 p-3 dark:border-neutral-700',
+              !visionStore.isWitnessEnabled && 'pointer-events-none opacity-50',
+            ]"
+          >
+            <input v-model="visionStore.periodicEnabled" type="checkbox" class="mt-0.5 h-4 w-4 border-gray-300 rounded text-primary-600">
+            <div class="flex flex-col gap-1">
+              <span class="font-medium">Periodic Mode (Interval)</span>
+              <span class="text-xs text-neutral-500">Capture at a fixed interval regardless of activity. Costs tokens consistently.</span>
+              <div v-if="visionStore.periodicEnabled" class="mt-2 flex items-center gap-2 text-xs">
+                <span>Every</span>
+                <input
+                  v-model.number="visionStore.periodicIntervalMinutes"
+                  type="number" min="1" max="120"
+                  class="w-16 border border-neutral-300 rounded bg-transparent px-1 py-0.5 dark:border-neutral-600"
+                >
+                <span>minutes</span>
+              </div>
+            </div>
+          </label>
+
+          <div class="rounded-lg bg-neutral-50 p-3 text-xs text-neutral-600 dark:bg-neutral-800/40 dark:text-neutral-400">
+            <div class="mb-1 flex items-center gap-1 text-neutral-700 font-semibold dark:text-neutral-300">
+              <div i-solar:keyboard-bold-duotone /> Hotkeys (global)
+            </div>
+            <div><kbd class="rounded bg-neutral-200 px-1 dark:bg-neutral-700">Ctrl+Shift+V</kbd> — capture now (on-demand)</div>
+            <div><kbd class="rounded bg-neutral-200 px-1 dark:bg-neutral-700">Ctrl+Shift+P</kbd> — toggle 15-min pause</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Privacy & Pause ──────────────────────────────────────────────────── -->
+      <div v-if="activeProvider && activeModel">
+        <div flex="~ col gap-4">
+          <div>
+            <h2 class="text-lg text-neutral-500 md:text-2xl dark:text-neutral-500">
+              Privacy
+            </h2>
+            <div text="neutral-400 dark:neutral-400">
+              <span>Block specific apps from being captured, or pause vision entirely.</span>
+            </div>
+          </div>
+
+          <div
+            :class="[
+              'rounded-lg p-3 flex items-center justify-between',
+              visionStore.isPaused
+                ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300'
+                : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400',
+            ]"
+          >
+            <div class="flex items-center gap-2 text-sm font-medium">
+              <div :class="visionStore.isPaused ? 'i-solar:eye-closed-bold-duotone' : 'i-solar:eye-bold-duotone'" />
+              <span v-if="visionStore.isPaused">Paused — about {{ pauseRemainingMinutes }} min remaining</span>
+              <span v-else>Vision active</span>
+            </div>
+            <div class="flex items-center gap-2">
               <button
-                v-for="m in [15, 30, 60]"
-                :key="m"
+                v-if="visionStore.isPaused"
                 type="button"
                 class="rounded bg-white px-2 py-1 text-xs text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
-                @click="visionStore.pauseFor(m)"
+                @click="visionStore.resumeNow()"
               >
-                Pause {{ m }}m
+                Resume now
               </button>
-            </template>
+              <template v-else>
+                <button
+                  v-for="m in [15, 30, 60]"
+                  :key="m"
+                  type="button"
+                  class="rounded bg-white px-2 py-1 text-xs text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+                  @click="visionStore.pauseFor(m)"
+                >
+                  Pause {{ m }}m
+                </button>
+              </template>
+            </div>
           </div>
-        </div>
 
-        <div class="space-y-2">
-          <label class="text-sm font-medium">App Blacklist</label>
-          <p class="text-xs text-neutral-500">
-            Substring match (case-insensitive) against active window title or process name. If matched, capture is skipped.
-          </p>
-          <div class="flex gap-2">
-            <input
-              v-model="newBlacklistEntry"
-              type="text"
-              placeholder="e.g. 1password, banking, vault"
-              class="flex-1 border border-neutral-300 rounded bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900"
-              @keydown.enter="addBlacklistEntry"
-            >
-            <button
-              type="button"
-              class="rounded bg-primary-500 px-3 py-2 text-sm text-white hover:bg-primary-600"
-              @click="addBlacklistEntry"
-            >
-              Add
-            </button>
-          </div>
-          <div v-if="visionStore.appBlacklist.length > 0" class="flex flex-wrap gap-2">
-            <span
-              v-for="entry in visionStore.appBlacklist"
-              :key="entry"
-              class="flex items-center gap-1 border border-neutral-200 rounded-full bg-neutral-100 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800"
-            >
-              <span>{{ entry }}</span>
+          <div class="space-y-2">
+            <label class="text-sm font-medium">App Blacklist</label>
+            <p class="text-xs text-neutral-500">
+              Substring match (case-insensitive) against active window title or process name. If matched, capture is skipped.
+            </p>
+            <div class="flex gap-2">
+              <input
+                v-model="newBlacklistEntry"
+                type="text"
+                placeholder="e.g. 1password, banking, vault"
+                class="flex-1 border border-neutral-300 rounded bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+                @keydown.enter="addBlacklistEntry"
+              >
               <button
                 type="button"
-                class="text-neutral-400 hover:text-red-500"
-                @click="visionStore.removeFromBlacklist(entry)"
+                class="rounded bg-primary-500 px-3 py-2 text-sm text-white hover:bg-primary-600"
+                @click="addBlacklistEntry"
               >
-                <div i-solar:close-circle-bold-duotone />
+                Add
               </button>
-            </span>
+            </div>
+            <div v-if="visionStore.appBlacklist.length > 0" class="flex flex-wrap gap-2">
+              <span
+                v-for="entry in visionStore.appBlacklist"
+                :key="entry"
+                class="flex items-center gap-1 border border-neutral-200 rounded-full bg-neutral-100 px-2 py-1 text-xs dark:border-neutral-700 dark:bg-neutral-800"
+              >
+                <span>{{ entry }}</span>
+                <button
+                  type="button"
+                  class="text-neutral-400 hover:text-red-500"
+                  @click="visionStore.removeFromBlacklist(entry)"
+                >
+                  <div i-solar:close-circle-bold-duotone />
+                </button>
+              </span>
+            </div>
           </div>
         </div>
       </div>
     </div>
-  </div>
 
-  <div
-    v-motion
-    text="neutral-200/50 dark:neutral-600/20" pointer-events-none
-    fixed top="[calc(100dvh-15rem)]" bottom-0 right--5 z--1
-    :initial="{ scale: 0.9, opacity: 0, x: 20 }"
-    :enter="{ scale: 1, opacity: 1, x: 0 }"
-    :duration="500"
-    size-60
-    flex items-center justify-center
-  >
-    <div text="60" i-solar:eye-scan-bold-duotone />
+    <div
+      v-motion
+      text="neutral-200/50 dark:neutral-600/20" pointer-events-none
+      fixed top="[calc(100dvh-15rem)]" bottom-0 right--5 z--1
+      :initial="{ scale: 0.9, opacity: 0, x: 20 }"
+      :enter="{ scale: 1, opacity: 1, x: 0 }"
+      :duration="500"
+      size-60
+      flex items-center justify-center
+    >
+      <div text="60" i-solar:eye-scan-bold-duotone />
+    </div>
   </div>
 </template>
 

@@ -36,7 +36,8 @@
   "include": [
     "src/**/*.ts",
     "src/**/*.d.ts",
-    "src/**/*.vue"
+    "src/**/*.vue",
+    "../stage-ui-mmd/src/types/**/*.d.ts"
   ],
   "exclude": [
     "dist",

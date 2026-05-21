@@ -536,7 +536,7 @@ LATEST ${target === 'assistant' ? 'COMPANION RESPONSE' : 'USER INPUT'}:
       )
 
       // Build the final prompt from the Director's base prompt + folded concept snippets
-      let finalPrompt = analysis.prompt + folded.promptSnippets
+      const finalPrompt = analysis.prompt + folded.promptSnippets
       artistLog('Stack Folding: Final resolved values:', {
         provider: folded.provider,
         model: folded.model,
@@ -586,9 +586,9 @@ LATEST ${target === 'assistant' ? 'COMPANION RESPONSE' : 'USER INPUT'}:
         }
 
         // 3.7 Artistry Bridge: Use folded stack values for generation resolution
-        let resolvedProvider = folded.provider
-        let resolvedModel = folded.model
-        let resolvedOptions = folded.options
+        const resolvedProvider = folded.provider
+        const resolvedModel = folded.model
+        const resolvedOptions = folded.options
 
         const artistryGlobals = artistryStore.artistryGlobals
         const generationPayload = {

@@ -27,7 +27,7 @@ services:
     build: ./omnivoice-server
     container_name: airi-tts
     ports:
-      - "8100:8100"
+      - '8100:8100'
     volumes:
       # Mount entire ref folder for multi-voice cloning
       # Place <name>.wav + <name>.txt pairs here, use voice="clone:<name>"

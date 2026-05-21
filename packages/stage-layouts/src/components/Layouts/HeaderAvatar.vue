@@ -5,7 +5,7 @@ import { useBuildInfo } from '@proj-airi/stage-ui/composables'
 import { listSessions, signOut } from '@proj-airi/stage-ui/libs/auth'
 import { useAuthStore } from '@proj-airi/stage-ui/stores/auth'
 import { useTheme } from '@proj-airi/ui'
-import { onClickOutside, useMediaQuery } from '@vueuse/core'
+import { onClickOutside } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -16,8 +16,6 @@ const authStore = useAuthStore()
 const { isAuthenticated, user } = storeToRefs(authStore)
 const { isDark, toggleDark } = useTheme()
 const { t } = useI18n()
-
-const isMobile = useMediaQuery('(max-width: 768px)')
 
 const userName = computed(() => user.value?.name)
 const userAvatar = computed(() => user.value?.image)
