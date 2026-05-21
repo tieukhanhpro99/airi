@@ -234,6 +234,45 @@ export const useSpeechStore = defineStore('speech', () => {
   watch(availableVoices, updateActiveVoice, { deep: true })
 
   /**
+   * Non-verbal expression tags supported by OmniVoice-family providers.
+   * These are KEPT in the text (not stripped) when the active provider supports them.
+   * For providers that don't (e.g. VieNeu, ElevenLabs), they get stripped alongside
+   * other bracket content by the narrative stripper.
+   */
+  const OMNIVOICE_NONVERBAL_TAGS = new Set([
+    '[laughter]',
+    '[sigh]',
+    '[confirmation-en]',
+    '[question-en]',
+    '[question-ah]',
+    '[question-oh]',
+    '[question-ei]',
+    '[question-yi]',
+    '[surprise-ah]',
+    '[surprise-oh]',
+    '[surprise-wa]',
+    '[surprise-yo]',
+    '[dissatisfaction-hnn]',
+  ])
+
+  /** Provider IDs that support OmniVoice non-verbal tags natively. */
+  const NONVERBAL_CAPABLE_PROVIDERS = new Set([
+    'openai-compatible-audio-speech', // Our OmniVoice wrapper uses this provider type
+  ])
+
+  /**
+   * Whether the current speech provider supports non-verbal expression tags.
+   * When true, tags like [laughter] are preserved in the text sent to TTS.
+   * When false, they're stripped by the narrative cleaner.
+   *
+   * Users can also force this on/off via a localStorage flag for custom setups.
+   */
+  const preserveNonverbalTags = useLocalStorageManualReset<boolean>(
+    'settings/speech/preserve-nonverbal-tags',
+    true,
+  )
+
+  /**
    * Transforms text before sending to TTS provider
    */
   function transformTextForSpeech(text: string, providerId: string): string {
@@ -243,13 +282,36 @@ export const useSpeechStore = defineStore('speech', () => {
 
     let transformed = text
 
+    // Determine if we should keep non-verbal tags for this provider
+    const keepNonverbal = preserveNonverbalTags.value && NONVERBAL_CAPABLE_PROVIDERS.has(providerId)
+
     // 1. Strip Narrative (actions in asterisks, brackets, or parentheses)
     // We use non-greedy matching to catch discrete blocks: *pats*, [thinking], (whispers), <acting>
     if (stripNarrative.value) {
-      transformed = transformed.replace(/\*.*?\*|\[.*?\]|\(.*?\)|<.*?>/g, '')
-
-      // Clean up orphaned narrative markers that didn't have a pair but might trigger "star" or "bracket" sounds
-      transformed = transformed.replace(/[*[\]()<>\\]/g, '')
+      if (keepNonverbal) {
+        // Preserve OmniVoice non-verbal tags while stripping other bracket content.
+        // Strategy: temporarily replace known tags with placeholders, strip, then restore.
+        const placeholders: [string, string][] = []
+        let idx = 0
+        for (const tag of OMNIVOICE_NONVERBAL_TAGS) {
+          if (transformed.includes(tag)) {
+            const placeholder = `\u0000NV${idx}\u0000`
+            transformed = transformed.replaceAll(tag, placeholder)
+            placeholders.push([placeholder, tag])
+            idx++
+          }
+        }
+        transformed = transformed.replace(/\*.*?\*|\[.*?\]|\(.*?\)|<.*?>/g, '')
+        transformed = transformed.replace(/[*[\]()<>\\]/g, '')
+        // Restore non-verbal tags
+        for (const [placeholder, tag] of placeholders) {
+          transformed = transformed.replaceAll(placeholder, tag)
+        }
+      }
+      else {
+        transformed = transformed.replace(/\*.*?\*|\[.*?\]|\(.*?\)|<.*?>/g, '')
+        transformed = transformed.replace(/[*[\]()<>\\]/g, '')
+      }
     }
 
     // 2. Strip Emojis
@@ -427,6 +489,7 @@ export const useSpeechStore = defineStore('speech', () => {
     stripEmojis,
     stripSymbols,
     tildeReplacement,
+    preserveNonverbalTags,
 
     // Computed
     availableSpeechProvidersMetadata,

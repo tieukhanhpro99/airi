@@ -1,0 +1,14 @@
+# Model weights and caches (can be multi-GB)
+*.bin
+*.safetensors
+*.gguf
+*.onnx
+*.pt
+*.pth
+__pycache__/
+*.pyc
+
+# Docker volumes are managed by Docker, not git
+# But ignore any local cache dirs if they appear
+hf-cache/
+.cache/

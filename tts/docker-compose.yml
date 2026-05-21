@@ -1,0 +1,60 @@
+# Master TTS Docker Compose
+# Runs both OmniVoice and VieNeu-TTS servers.
+#
+# IMPORTANT: Both servers use GPU. On 8GB VRAM you can only run ONE at a time
+# comfortably. Use profiles to choose:
+#
+#   docker compose --profile omnivoice up -d    ← OmniVoice only (port 8100)
+#   docker compose --profile vieneu up -d       ← VieNeu only (port 8200)
+#   docker compose up -d                        ← Both (risky on 8GB VRAM)
+#
+# Reference audio (me.wav + me.txt) is in this directory and mounted into both.
+
+services:
+  omnivoice:
+    build: ./omnivoice-server
+    profiles: ["omnivoice", "all"]
+    ports:
+      - "8100:8100"
+    volumes:
+      - ./me.wav:/app/ref/me.wav:ro
+      - ./me.txt:/app/ref/me.txt:ro
+      - omnivoice-hf-cache:/root/.cache/huggingface
+    environment:
+      - OMNIVOICE_DEFAULT_MODEL=k2-fsa/OmniVoice
+      - OMNIVOICE_DEVICE=cuda:0
+      - OMNIVOICE_REF_AUDIO=/app/ref/me.wav
+      - OMNIVOICE_NUM_STEPS=16
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  vieneu:
+    image: pnnbao/vieneu-tts:latest
+    profiles: ["vieneu", "all"]
+    ports:
+      - "8200:23333"
+    volumes:
+      - ./me.wav:/app/ref/me.wav:ro
+      - ./me.txt:/app/ref/me.txt:ro
+      - vieneu-hf-cache:/root/.cache/huggingface
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  omnivoice-hf-cache:
+  vieneu-hf-cache:
