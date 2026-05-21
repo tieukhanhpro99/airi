@@ -12,19 +12,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install PyTorch + OmniVoice
+# Install PyTorch (CUDA 12.4)
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu124 && \
-    pip install --no-cache-dir omnivoice fastapi uvicorn[standard] soundfile numpy
+    pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-# Copy server code + reference audio
+# Install both TTS engines + server deps
+# OmniVoice: pip install omnivoice
+# VieNeu: pip install vieneu (with llama-cpp pre-built for Linux)
+RUN pip install --no-cache-dir \
+    omnivoice \
+    vieneu \
+    fastapi \
+    uvicorn[standard] \
+    soundfile \
+    numpy
+
+# Copy server code
 WORKDIR /app
 COPY server.py /app/server.py
-COPY ref/ /app/ref/
 
-# Pre-download models on build (optional — comment out to download at runtime)
-# RUN python3 -c "from omnivoice import OmniVoice; OmniVoice.from_pretrained('k2-fsa/OmniVoice')"
+# Reference audio directory (mounted at runtime)
+RUN mkdir -p /app/ref
 
 EXPOSE 8100
+
+# Default: load OmniVoice, 16 diffusion steps, natural emotion for VieNeu
+ENV TTS_DEFAULT_MODEL=omnivoice
+ENV TTS_DEVICE=cuda:0
+ENV TTS_REF_AUDIO=/app/ref/me.wav
+ENV TTS_NUM_STEPS=16
+ENV TTS_VIENEU_EMOTION=natural
 
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8100"]

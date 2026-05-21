@@ -1,50 +1,46 @@
-# Master TTS Docker Compose
-# Runs both OmniVoice and VieNeu-TTS servers.
+# Unified TTS Server
+# One container, one port (8100), all models accessible via the `model` field.
 #
-# IMPORTANT: Both servers use GPU. On 8GB VRAM you can only run ONE at a time
-# comfortably. Use profiles to choose:
+# Available models (pass as "model" in /v1/audio/speech request body):
+#   - "omnivoice"      → k2-fsa/OmniVoice (multilingual, non-verbal, voice design)
+#   - "khanhtts"       → kjanh/KhanhTTS-OmniVoice (Vietnamese fine-tune)
+#   - "vieneu"         → VieNeu-TTS v2 Standard (highest VN quality)
+#   - "vieneu-turbo"   → VieNeu-TTS v2 Turbo (fastest, CPU-friendly)
 #
-#   docker compose --profile omnivoice up -d    ← OmniVoice only (port 8100)
-#   docker compose --profile vieneu up -d       ← VieNeu only (port 8200)
-#   docker compose up -d                        ← Both (risky on 8GB VRAM)
+# Usage:
+#   cd tts
+#   docker compose up -d --build
 #
-# Reference audio (me.wav + me.txt) is in this directory and mounted into both.
+# Test:
+#   curl http://localhost:8100/health
+#   curl http://localhost:8100/v1/audio/speech -X POST \
+#     -H "Content-Type: application/json" \
+#     -d '{"model":"omnivoice","input":"Xin chào!","voice":"clone"}' \
+#     --output test.wav
+#
+# Switch model (no restart needed):
+#   Just change "model" field in the next request. Server auto-swaps.
+#   First swap takes ~10-20s (download + load), subsequent swaps ~3-5s.
 
 services:
-  omnivoice:
+  tts:
     build: ./omnivoice-server
-    profiles: ["omnivoice", "all"]
+    container_name: airi-tts
     ports:
       - "8100:8100"
     volumes:
+      # Reference audio for voice cloning
       - ./me.wav:/app/ref/me.wav:ro
       - ./me.txt:/app/ref/me.txt:ro
-      - omnivoice-hf-cache:/root/.cache/huggingface
+      # Persist model downloads across container restarts
+      - tts-hf-cache:/root/.cache/huggingface
+      - tts-vieneu-cache:/root/.cache/vieneu
     environment:
-      - OMNIVOICE_DEFAULT_MODEL=k2-fsa/OmniVoice
-      - OMNIVOICE_DEVICE=cuda:0
-      - OMNIVOICE_REF_AUDIO=/app/ref/me.wav
-      - OMNIVOICE_NUM_STEPS=16
-      - NVIDIA_VISIBLE_DEVICES=all
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    restart: unless-stopped
-
-  vieneu:
-    image: pnnbao/vieneu-tts:latest
-    profiles: ["vieneu", "all"]
-    ports:
-      - "8200:23333"
-    volumes:
-      - ./me.wav:/app/ref/me.wav:ro
-      - ./me.txt:/app/ref/me.txt:ro
-      - vieneu-hf-cache:/root/.cache/huggingface
-    environment:
+      - TTS_DEFAULT_MODEL=omnivoice
+      - TTS_DEVICE=cuda:0
+      - TTS_REF_AUDIO=/app/ref/me.wav
+      - TTS_NUM_STEPS=16
+      - TTS_VIENEU_EMOTION=natural
       - NVIDIA_VISIBLE_DEVICES=all
     deploy:
       resources:
@@ -56,5 +52,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  omnivoice-hf-cache:
-  vieneu-hf-cache:
+  tts-hf-cache:
+  tts-vieneu-cache:
