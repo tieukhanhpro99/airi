@@ -1,8 +1,6 @@
-// @ts-expect-error - Missing types for @moeru/three-mmd
 import type { MMD } from '@moeru/three-mmd'
 import type { AnimationClip } from 'three'
 
-// @ts-expect-error - Missing types for @moeru/three-mmd
 import { buildAnimation, VMDLoader } from '@moeru/three-mmd'
 
 // Reuse a single VMDLoader instance across calls — it is stateless after loading.

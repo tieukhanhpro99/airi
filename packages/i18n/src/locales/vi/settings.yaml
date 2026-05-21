@@ -382,6 +382,40 @@ pages:
       token-description: Mã token bot Discord của bạn
       token-placeholder: Nhập mã token bot Discord của bạn
       configured: Đã cấu hình Discord thành công!
+      voice:
+        title: Kênh thoại
+        connected: Đã kết nối tới {channel}
+        disconnected: Chưa kết nối kênh thoại
+        enabled: Bật voice Discord
+        enabled-description: Cho phép AIRI vào kênh thoại và nói trong Discord.
+        mute-local-tts: Tắt TTS cục bộ
+        mute-local-tts-description: Tránh phát trùng ở loa máy tính khi voice Discord đang hoạt động.
+        auto-learn: Tự học hồ sơ người dùng
+        auto-learn-description: Cho AIRI tự cập nhật ghi chú ngắn cho từng người từ
+          thông tin bền vững nghe trong voice chat.
+        memory-tools: Bật công cụ trí nhớ dài hạn
+        memory-tools-description: Cho phép hội thoại Discord dùng text_journal để ghi và tìm trí nhớ.
+        stt-language: Gợi ý ngôn ngữ STT
+        stt-language-description: Gợi ý ngôn ngữ cho Whisper/speaches, ví dụ vi, en,
+          hoặc để trống để tự nhận diện.
+        stt-prompt: Prompt bias STT
+        stt-prompt-description: Định hướng transcription theo cách nói thường dùng trên Discord.
+        reply-language-prompt: Prompt ngôn ngữ trả lời
+        reply-language-prompt-description: System note được chèn trước mỗi lượt voice.
+        memory-prompt: Prompt trí nhớ
+        memory-prompt-description: Chỉ dẫn tùy chọn về lúc AIRI nên ghi hoặc tìm trí nhớ dài hạn.
+      profiles:
+        title: Hồ sơ voice
+        empty: Chưa có hồ sơ voice. Hồ sơ sẽ xuất hiện sau khi có người nói trong
+          Discord voice.
+        select: Hồ sơ
+        select-description: Chọn hồ sơ người dùng Discord để xem hoặc chỉnh.
+        last-seen: 'Gặp lần cuối: {time}'
+        address-as: Cách gọi
+        address-as-description: AIRI nên gọi người này như thế nào.
+        notes: Ghi chú hồ sơ
+        notes-description: Ghi chú bền vững, ngắn gọn, được chèn khi người này nói.
+        delete: Xóa hồ sơ
     speech:
       description: Tổng hợp giọng nói
       sections:

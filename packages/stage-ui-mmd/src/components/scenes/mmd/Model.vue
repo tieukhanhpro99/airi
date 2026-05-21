@@ -5,7 +5,6 @@
   * Handles model loading, animation playback, morph-based expressions, and lip sync.
 */
 
-// @ts-expect-error - Missing types for @moeru/three-mmd
 import type { MMD } from '@moeru/three-mmd'
 import type { Group, PerspectiveCamera } from 'three'
 
@@ -86,6 +85,7 @@ const mmdInstance = shallowRef<MMD>()
 const mmdGroup = shallowRef<Group>()
 const modelLoaded = ref(false)
 let loadSequence = 0
+const isComponentMounted = ref(false)
 
 const mmdAnimationMixer = shallowRef<AnimationMixer>()
 const mmdEmote = shallowRef<ReturnType<typeof useMMDEmote>>()
@@ -172,7 +172,7 @@ async function loadModel(url: string) {
   const reason = resolveLoadReason()
 
   emit('loadStart', reason)
-  console.log('[MMDModel] loadModel started!', { url, reason, sequence: currentSequence })
+  console.info('[MMDModel] loadModel started!', { url, reason, sequence: currentSequence })
 
   try {
     const result = await loadMmd(url, {
@@ -200,9 +200,9 @@ async function loadModel(url: string) {
       emit('error', new Error('Failed to load MMD model'))
       return
     }
-    console.log('[MMDModel] loadMmd succeeded!', { mesh: result.mmd.mesh.name })
-    console.log('[MMDModel] Available Morph Targets:', Object.keys(result.mmd.mesh.morphTargetDictionary || {}))
-    console.log('[MMDModel] Available Bones:', result.mmd.mesh.skeleton?.bones.map((b: any) => b.name) || [])
+    console.info('[MMDModel] loadMmd succeeded!', { mesh: result.mmd.mesh.name })
+    console.info('[MMDModel] Available Morph Targets:', Object.keys(result.mmd.mesh.morphTargetDictionary || {}))
+    console.info('[MMDModel] Available Bones:', result.mmd.mesh.skeleton?.bones.map((b: any) => b.name) || [])
 
     // Update store with available morphs
     mmdStore.availableMorphs = Object.keys(result.mmd.mesh.morphTargetDictionary || {})
@@ -288,7 +288,7 @@ async function loadModel(url: string) {
   }
   catch (error) {
     if (currentSequence !== loadSequence) {
-      console.log('[MMDModel] loadModel failed but sequence changed. Ignoring error.')
+      console.info('[MMDModel] loadModel failed but sequence changed. Ignoring error.')
       return
     }
     console.error('[MMDModel] loadModel FAILED:', error)
@@ -298,12 +298,12 @@ async function loadModel(url: string) {
 
 // Watch idle animation changes
 watch(() => props.idleAnimation, async (newAnim) => {
-  console.log('[MMDModel] idleAnimation changed:', newAnim)
+  console.info('[MMDModel] idleAnimation changed:', newAnim)
   if (newAnim && newAnim.endsWith('.vmd') && mmdInstance.value && mmdAnimationMixer.value) {
     try {
       const clip = await loadVMDAnimation(newAnim, mmdInstance.value)
       if (clip) {
-        console.log('[MMDModel] Playing new animation:', newAnim)
+        console.info('[MMDModel] Playing new animation:', newAnim)
         mmdAnimationMixer.value.stopAllAction()
         const action = mmdAnimationMixer.value.clipAction(clip)
         action.play()
@@ -314,7 +314,7 @@ watch(() => props.idleAnimation, async (newAnim) => {
     }
   }
   else if (mmdAnimationMixer.value) {
-    console.log('[MMDModel] Stopping all actions (None or invalid animation)')
+    console.info('[MMDModel] Stopping all actions (None or invalid animation)')
     mmdAnimationMixer.value.stopAllAction()
   }
 })
@@ -347,18 +347,16 @@ watch(() => props.scale, (newScale) => {
 
 // Watch preview expression changes
 watch(() => props.previewExpression, (newExpr) => {
-  console.log('[MMDModel] previewExpression changed:', newExpr)
+  console.info('[MMDModel] previewExpression changed:', newExpr)
   if (newExpr && mmdEmote.value) {
-    console.log('[MMDModel] Setting expression:', newExpr)
+    console.info('[MMDModel] Setting expression:', newExpr)
     mmdEmote.value.setExpression(newExpr, 1.0)
   }
   else if (mmdEmote.value) {
-    console.log('[MMDModel] Resetting expression')
+    console.info('[MMDModel] Resetting expression')
     mmdEmote.value.resetExpression()
   }
 })
-
-const isComponentMounted = ref(false)
 
 onMounted(() => {
   isComponentMounted.value = true

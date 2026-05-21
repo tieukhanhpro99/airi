@@ -5,7 +5,6 @@ import { usePositioningStore } from '@proj-airi/stage-ui/stores/settings/positio
 import { Button, FieldRange, SelectTab } from '@proj-airi/ui'
 import { storeToRefs } from 'pinia'
 import { computed, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
 
 import { Section } from '../../../layouts'
 
@@ -17,7 +16,6 @@ const props = withDefaults(defineProps<{
   allowExtractColors: true,
 })
 
-const { t } = useI18n()
 const { stageModelSelected } = storeToRefs(useSettings())
 const positioningStore = usePositioningStore()
 const mmdStore = useMmd()
@@ -118,14 +116,14 @@ function cancelEditing() {
 }
 
 function handleMorphSelect(morph: string) {
-  console.log('[MMD Settings] Previewing morph:', morph)
+  console.info('[MMD Settings] Previewing morph:', morph)
   previewExpression.value = morph
 }
 
 // Motions List State
 
 function handleMotionSelect(motion: string) {
-  console.log('[MMD Settings] Selecting motion:', motion)
+  console.info('[MMD Settings] Selecting motion:', motion)
   currentMotion.value = motion
 }
 </script>

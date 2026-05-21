@@ -1,4 +1,3 @@
-// @ts-expect-error - Missing types for @moeru/three-mmd
 import type { MMD } from '@moeru/three-mmd'
 import type { Ref } from 'vue'
 import type { Profile } from 'wlipsync'

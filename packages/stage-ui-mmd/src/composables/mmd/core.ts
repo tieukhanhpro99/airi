@@ -1,4 +1,3 @@
-// @ts-expect-error - Missing types for @moeru/three-mmd
 import type { MMD } from '@moeru/three-mmd'
 import type { Mesh, Object3D, Scene } from 'three'
 
@@ -30,8 +29,8 @@ export async function loadMmd(modelUrl: string, options?: {
   modelSize: Vector3
   initialCameraOffset: Vector3
 } | undefined> {
-  console.log('[MMD:Core] Starting loadMmd for URL:', modelUrl)
-  console.log('[MMD:Core] Texture map size:', options?.textureMap?.size ?? 0)
+  console.info('[MMD:Core] Starting loadMmd for URL:', modelUrl)
+  console.info('[MMD:Core] Texture map size:', options?.textureMap?.size ?? 0)
 
   // Create a loader with texture remapping if a texture map is provided
   const manager = options?.textureMap
@@ -39,12 +38,12 @@ export async function loadMmd(modelUrl: string, options?: {
     : undefined
   const loader = createMMDLoader(manager)
 
-  console.log('[MMD:Core] Calling loader.loadAsync...')
+  console.info('[MMD:Core] Calling loader.loadAsync...')
   let mmd
   try {
     mmd = await loader.loadAsync(modelUrl, (progress: ProgressEvent) => {
       if (progress.total > 0) {
-        console.log(`[MMD:Core] Progress: ${Math.round((progress.loaded / progress.total) * 100)}%`)
+        console.info(`[MMD:Core] Progress: ${Math.round((progress.loaded / progress.total) * 100)}%`)
       }
       options?.onProgress?.(progress)
     })
@@ -54,12 +53,12 @@ export async function loadMmd(modelUrl: string, options?: {
     throw err
   }
 
-  console.log('[MMD:Core] loader.loadAsync completed!')
+  console.info('[MMD:Core] loader.loadAsync completed!')
   if (!mmd || !mmd.mesh) {
     console.warn('[MMD:Core] Model loaded but mesh is missing!')
     return undefined
   }
-  console.log('[MMD:Core] Loaded mesh name:', mmd.mesh.name)
+  console.info('[MMD:Core] Loaded mesh name:', mmd.mesh.name)
 
   // Disable frustum culling on all children
   mmd.mesh.traverse((object: Object3D) => {

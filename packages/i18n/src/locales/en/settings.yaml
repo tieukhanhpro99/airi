@@ -568,6 +568,41 @@ pages:
         content: Message
         content-placeholder: Enter a test message...
         send: Send
+      voice:
+        title: Voice Channel
+        connected: Connected to {channel}
+        disconnected: Not connected to a voice channel
+        enabled: Enable Discord voice
+        enabled-description: Allow AIRI to join voice channels and speak there.
+        mute-local-tts: Mute local TTS
+        mute-local-tts-description: Avoid double playback on desktop speakers while
+          Discord voice is active.
+        auto-learn: Auto-learn user profiles
+        auto-learn-description: Let AIRI update compact per-user notes from durable
+          facts heard in voice chat.
+        memory-tools: Enable long-term memory tools
+        memory-tools-description: Allow Discord conversations to use text_journal create and search.
+        stt-language: STT language hint
+        stt-language-description: Whisper/speaches language hint, such as vi, en, or
+          blank for auto-detect.
+        stt-prompt: STT prompt bias
+        stt-prompt-description: Bias transcription toward your normal Discord wording.
+        reply-language-prompt: Reply language prompt
+        reply-language-prompt-description: System note injected before each voice turn.
+        memory-prompt: Memory prompt
+        memory-prompt-description: Optional custom instruction for when AIRI should
+          write or search long-term memory.
+      profiles:
+        title: Voice Profiles
+        empty: No voice profiles yet. They appear after someone speaks in Discord voice.
+        select: Profile
+        select-description: Choose a Discord user profile to inspect or edit.
+        last-seen: 'Last seen: {time}'
+        address-as: Address as
+        address-as-description: How AIRI should call this user.
+        notes: Profile notes
+        notes-description: Compact durable notes injected when this user speaks.
+        delete: Delete Profile
     speech:
       description: Speech synthesis
       sections:
@@ -831,7 +866,8 @@ pages:
       openai-compatible-audio-transcription:
         description: Bring Your Own Endpoint - Custom OpenAI-compatible STT endpoint
       aliyun-nls-transcription:
-        description: Multilingual Powerhouse - Robust real-time STT with deep Chinese dialect support
+        description: Multilingual Powerhouse - Robust real-time STT with deep Chinese
+          dialect support
       comet-api-transcription:
         description: Enterprise-grade cloud transcription
       aws-polly-tts:

@@ -1,6 +1,5 @@
 import type { LoadingManager } from 'three'
 
-// @ts-expect-error - Missing types for @moeru/three-mmd
 import { MMDLoader } from '@moeru/three-mmd'
 import { LoadingManager as ThreeLoadingManager } from 'three'
 
@@ -31,17 +30,17 @@ export function createMMDLoader(manager?: LoadingManager): MMDLoader {
 export function createTextureRemappingManager(textureMap: Map<string, string>): LoadingManager {
   const manager = new ThreeLoadingManager()
 
-  console.log('[MMD:Loader] Creating manager. Map keys:', Array.from(textureMap.keys()))
+  console.info('[MMD:Loader] Creating manager. Map keys:', Array.from(textureMap.keys()))
 
   manager.setURLModifier((url: string) => {
-    console.log('[MMD:Loader] Requested URL:', url)
+    console.info('[MMD:Loader] Requested URL:', url)
 
     // Normalize slashes and lowercase
     const normalizedUrl = url.replace(/\\/g, '/').toLowerCase()
 
     // 1. Try exact match on the full normalized URL
     if (textureMap.has(normalizedUrl)) {
-      console.log('[MMD:Loader] Resolved (exact match):', normalizedUrl)
+      console.info('[MMD:Loader] Resolved (exact match):', normalizedUrl)
       return textureMap.get(normalizedUrl)!
     }
 
@@ -50,7 +49,7 @@ export function createTextureRemappingManager(textureMap: Map<string, string>): 
     for (let i = 0; i < pathParts.length; i++) {
       const candidate = pathParts.slice(i).join('/')
       if (textureMap.has(candidate)) {
-        console.log('[MMD:Loader] Resolved (suffix match):', candidate)
+        console.info('[MMD:Loader] Resolved (suffix match):', candidate)
         return textureMap.get(candidate)!
       }
     }
@@ -58,7 +57,7 @@ export function createTextureRemappingManager(textureMap: Map<string, string>): 
     // 3. Last resort: just the filename
     const filename = pathParts[pathParts.length - 1]
     if (filename && textureMap.has(filename)) {
-      console.log('[MMD:Loader] Resolved (filename fallback):', filename)
+      console.info('[MMD:Loader] Resolved (filename fallback):', filename)
       return textureMap.get(filename)!
     }
 

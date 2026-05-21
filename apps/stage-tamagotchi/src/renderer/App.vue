@@ -80,7 +80,7 @@ const proactivityStore = useProactivityStore()
 async function seedTextJournalEntryFromWindow() {
   await textJournalStore.load()
   const entry = await textJournalStore.seedActiveCharacterEntry()
-  console.log('[TextJournal] Seeded entry via window.seedTextJournalEntry()', entry)
+  console.info('[TextJournal] Seeded entry via window.seedTextJournalEntry()', entry)
   return entry
 }
 
@@ -147,7 +147,7 @@ onMounted(() => updateThemeColor())
 onMounted(async () => {
   const startupAt = performance.now()
   const logStep = (label: string) => {
-    console.log(`[PipelineTTS:App] ${label} (+${Math.round(performance.now() - startupAt)}ms)`)
+    console.info(`[PipelineTTS:App] ${label} (+${Math.round(performance.now() - startupAt)}ms)`)
   }
 
   logStep('onMounted start')
@@ -160,6 +160,7 @@ onMounted(async () => {
   await contextBridgeStore.initialize().catch((err: any) => console.error('[PipelineTTS:App] FAILED context bridge init:', err))
 
   proactivityStore.registerTools(builtinTools)
+  discordStore.registerTools(builtinTools)
   proactivityStore.startHeartbeatLoop()
 
   logStep('Initializing Analytics & Card stores')
@@ -220,7 +221,7 @@ onMounted(async () => {
 
   // Auto-backup check (every 24 hours)
   if (backupStore.isBackupEnabled && Date.now() - backupStore.lastBackupTime > 24 * 60 * 60 * 1000) {
-    console.log('[App] Auto-backup condition met. Triggering backup...')
+    console.info('[App] Auto-backup condition met. Triggering backup...')
     void backupStore.triggerBackup()
   }
 
@@ -265,7 +266,7 @@ watch(
     const nextTitle = parts.join(' - ')
 
     if (document.title !== nextTitle) {
-      console.log('[AppTitle] Updating settings title', {
+      console.info('[AppTitle] Updating settings title', {
         from: document.title,
         to: nextTitle,
         route: route.path,
@@ -288,7 +289,7 @@ watch(
     const nextTitle = `AIRI - Looking at ${activeCharacterLabel}`
 
     if (document.title !== nextTitle) {
-      console.log('[AppTitle] Updating main title', {
+      console.info('[AppTitle] Updating main title', {
         from: document.title,
         to: nextTitle,
         route: route.path,

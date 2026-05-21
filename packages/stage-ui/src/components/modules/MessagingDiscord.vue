@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { Button, FieldInput } from '@proj-airi/ui'
+import { Button, FieldCheckbox, FieldInput, FieldSelect, FieldTextArea } from '@proj-airi/ui'
 import { storeToRefs } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { useDiscordStore } from '../../stores/modules/discord'
@@ -15,6 +15,16 @@ const {
   isConnecting,
   eventLog,
   configured,
+  voiceEnabled,
+  voiceMuteLocalTts,
+  voiceSttLanguage,
+  voiceSttPrompt,
+  voiceReplyLanguagePrompt,
+  voiceAutoLearnProfiles,
+  voiceMemoryToolsEnabled,
+  voiceMemoryPrompt,
+  voiceUserProfiles,
+  voiceState,
 } = storeToRefs(discordStore)
 
 // Dev console collapsed state
@@ -24,6 +34,52 @@ const devConsoleOpen = ref(false)
 const simulateOpen = ref(false)
 const simulateUsername = ref('TestUser')
 const simulateContent = ref('Hello from simulated event!')
+const selectedVoiceProfileId = ref('')
+
+const voiceProfileRows = computed(() => {
+  return Object.values(voiceUserProfiles.value)
+    .sort((a, b) => b.lastSeen - a.lastSeen || a.displayName.localeCompare(b.displayName))
+})
+
+const voiceProfileOptions = computed(() => {
+  return voiceProfileRows.value.map(profile => ({
+    label: `${profile.displayName} (${profile.userId.slice(-6)})`,
+    value: profile.userId,
+  }))
+})
+
+const selectedVoiceProfile = computed(() => {
+  if (!selectedVoiceProfileId.value)
+    return null
+  return voiceUserProfiles.value[selectedVoiceProfileId.value] ?? null
+})
+
+const selectedProfileAddressAs = computed({
+  get: () => selectedVoiceProfile.value?.addressAs ?? '',
+  set: (value: string | undefined) => {
+    if (!selectedVoiceProfileId.value)
+      return
+    discordStore.upsertVoiceProfile(selectedVoiceProfileId.value, { addressAs: value ?? '' })
+  },
+})
+
+const selectedProfileNotes = computed({
+  get: () => selectedVoiceProfile.value?.notes ?? '',
+  set: (value: string | undefined) => {
+    if (!selectedVoiceProfileId.value)
+      return
+    discordStore.upsertVoiceProfile(selectedVoiceProfileId.value, { notes: value ?? '' })
+  },
+})
+
+watch(voiceProfileRows, (profiles) => {
+  if (profiles.length === 0) {
+    selectedVoiceProfileId.value = ''
+    return
+  }
+  if (!profiles.some(profile => profile.userId === selectedVoiceProfileId.value))
+    selectedVoiceProfileId.value = profiles[0].userId
+}, { immediate: true })
 
 function handleStartStop() {
   if (isConnected.value || isConnecting.value) {
@@ -44,6 +100,16 @@ function handleSimulate() {
 
 function handleForceSync() {
   discordStore.forceCardSync({ name: '', avatarBase64: null })
+}
+
+function handleDeleteSelectedVoiceProfile() {
+  if (!selectedVoiceProfileId.value)
+    return
+  discordStore.deleteVoiceProfile(selectedVoiceProfileId.value)
+}
+
+function formatLastSeen(timestamp: number) {
+  return new Date(timestamp).toLocaleString()
 }
 
 function getStatusColor(state: string) {
@@ -164,7 +230,129 @@ function formatTimestamp(ts: number) {
     </section>
 
     <!-- ═══════════════════════════════════════════════════════════════════ -->
-    <!-- Section 3: Debug Actions -->
+    <!-- Section 3: Voice Settings -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <section class="mc-section">
+      <div class="mc-section-header">
+        <h3>{{ t('settings.pages.modules.messaging-discord.voice.title') }}</h3>
+      </div>
+
+      <div class="mc-status-banner" :class="{ 'mc-status--connected': voiceState.connected }">
+        <div class="mc-status-dot" :style="{ backgroundColor: voiceState.connected ? '#22c55e' : '#6b7280' }" />
+        <div class="mc-status-info">
+          <span class="mc-status-label">
+            {{ voiceState.connected
+              ? t('settings.pages.modules.messaging-discord.voice.connected', { channel: voiceState.channelName || 'voice channel' })
+              : t('settings.pages.modules.messaging-discord.voice.disconnected') }}
+          </span>
+        </div>
+      </div>
+
+      <div class="mc-field-grid">
+        <FieldCheckbox
+          v-model="voiceEnabled"
+          :label="t('settings.pages.modules.messaging-discord.voice.enabled')"
+          :description="t('settings.pages.modules.messaging-discord.voice.enabled-description')"
+        />
+        <FieldCheckbox
+          v-model="voiceMuteLocalTts"
+          :label="t('settings.pages.modules.messaging-discord.voice.mute-local-tts')"
+          :description="t('settings.pages.modules.messaging-discord.voice.mute-local-tts-description')"
+        />
+        <FieldCheckbox
+          v-model="voiceAutoLearnProfiles"
+          :label="t('settings.pages.modules.messaging-discord.voice.auto-learn')"
+          :description="t('settings.pages.modules.messaging-discord.voice.auto-learn-description')"
+        />
+        <FieldCheckbox
+          v-model="voiceMemoryToolsEnabled"
+          :label="t('settings.pages.modules.messaging-discord.voice.memory-tools')"
+          :description="t('settings.pages.modules.messaging-discord.voice.memory-tools-description')"
+        />
+      </div>
+
+      <div class="mc-field-grid mc-field-grid--single">
+        <FieldInput
+          v-model="voiceSttLanguage"
+          :label="t('settings.pages.modules.messaging-discord.voice.stt-language')"
+          :description="t('settings.pages.modules.messaging-discord.voice.stt-language-description')"
+          placeholder="vi"
+        />
+        <FieldTextArea
+          v-model="voiceSttPrompt"
+          :required="false"
+          :rows="3"
+          :label="t('settings.pages.modules.messaging-discord.voice.stt-prompt')"
+          :description="t('settings.pages.modules.messaging-discord.voice.stt-prompt-description')"
+        />
+        <FieldTextArea
+          v-model="voiceReplyLanguagePrompt"
+          :required="false"
+          :rows="3"
+          :label="t('settings.pages.modules.messaging-discord.voice.reply-language-prompt')"
+          :description="t('settings.pages.modules.messaging-discord.voice.reply-language-prompt-description')"
+        />
+        <FieldTextArea
+          v-model="voiceMemoryPrompt"
+          :required="false"
+          :rows="3"
+          :label="t('settings.pages.modules.messaging-discord.voice.memory-prompt')"
+          :description="t('settings.pages.modules.messaging-discord.voice.memory-prompt-description')"
+        />
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- Section 4: Voice Profile Manager -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <section class="mc-section">
+      <div class="mc-section-header">
+        <h3>{{ t('settings.pages.modules.messaging-discord.profiles.title') }}</h3>
+      </div>
+
+      <div v-if="voiceProfileRows.length === 0" class="mc-console-empty">
+        {{ t('settings.pages.modules.messaging-discord.profiles.empty') }}
+      </div>
+
+      <div v-else class="mc-profile-panel">
+        <FieldSelect
+          v-model="selectedVoiceProfileId"
+          :label="t('settings.pages.modules.messaging-discord.profiles.select')"
+          :description="t('settings.pages.modules.messaging-discord.profiles.select-description')"
+          :options="voiceProfileOptions"
+          layout="vertical"
+        />
+
+        <div v-if="selectedVoiceProfile" class="mc-profile-card">
+          <div class="mc-profile-meta">
+            <span>{{ selectedVoiceProfile.displayName }}</span>
+            <span>{{ selectedVoiceProfile.userId }}</span>
+            <span>{{ t('settings.pages.modules.messaging-discord.profiles.last-seen', { time: formatLastSeen(selectedVoiceProfile.lastSeen) }) }}</span>
+          </div>
+
+          <FieldInput
+            v-model="selectedProfileAddressAs"
+            :label="t('settings.pages.modules.messaging-discord.profiles.address-as')"
+            :description="t('settings.pages.modules.messaging-discord.profiles.address-as-description')"
+          />
+          <FieldTextArea
+            v-model="selectedProfileNotes"
+            :required="false"
+            :rows="6"
+            :label="t('settings.pages.modules.messaging-discord.profiles.notes')"
+            :description="t('settings.pages.modules.messaging-discord.profiles.notes-description')"
+          />
+          <Button
+            :label="t('settings.pages.modules.messaging-discord.profiles.delete')"
+            variant="danger"
+            @click="handleDeleteSelectedVoiceProfile"
+          />
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!-- Section 5: Debug Actions -->
     <!-- ═══════════════════════════════════════════════════════════════════ -->
     <section class="mc-section">
       <div class="mc-action-buttons">
@@ -396,6 +584,52 @@ function formatTimestamp(ts: number) {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+.mc-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mc-field-grid--single {
+  grid-template-columns: 1fr;
+}
+
+.mc-profile-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(280px, 1.3fr);
+  gap: 1rem;
+}
+
+.mc-profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mc-profile-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  opacity: 0.65;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 860px) {
+  .mc-profile-panel {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ── Guild List ────────────────────────────────────────────────────────── */

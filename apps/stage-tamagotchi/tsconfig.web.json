@@ -50,6 +50,8 @@
     "src/shared/**/*.ts",
     "src/shared/**/*.d.ts",
     "src/shared/**/*.tsx",
-    "src/shared/**/*.vue"
+    "src/shared/**/*.vue",
+
+    "../../packages/stage-ui-mmd/src/types/**/*.d.ts"
   ]
 }

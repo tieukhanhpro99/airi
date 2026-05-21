@@ -1,4 +1,3 @@
-// @ts-expect-error - Missing types for @moeru/three-mmd
 import type { MMD } from '@moeru/three-mmd'
 
 import { ref } from 'vue'
@@ -87,18 +86,18 @@ export function useMMDEmote(mmd: MMD) {
   }
 
   function setExpression(expressionName: string, intensity = 1.0, duration = 0.4) {
-    console.log('[useMMDEmote] setExpression requested:', expressionName, 'intensity:', intensity)
+    console.info('[useMMDEmote] setExpression requested:', expressionName, 'intensity:', intensity)
     if (currentEmotion.value === expressionName)
       return
 
     currentEmotion.value = expressionName
     const targetMorphs = resolveMorphIndices(expressionName)
-    console.log('[useMMDEmote] resolved targetMorphs:', targetMorphs)
+    console.info('[useMMDEmote] resolved targetMorphs:', targetMorphs)
 
     // Apply directly for testing to see if it bypasses any issues!
     if (mmd.mesh.morphTargetInfluences) {
       for (const [index, weight] of targetMorphs) {
-        console.log('[useMMDEmote] Applying weight DIRECTLY to mesh:', index, 'weight:', weight)
+        console.info('[useMMDEmote] Applying weight DIRECTLY to mesh:', index, 'weight:', weight)
         mmd.mesh.morphTargetInfluences[index] = weight
       }
     }

@@ -1,4 +1,7 @@
 import type { DiscordCommandDefinition, DiscordEventLogEntry, DiscordInboundMessage, DiscordInteractionPayload, DiscordServiceStatus, DiscordVoiceState, DiscordVoiceSttConfig, DiscordVoiceTranscript } from '@proj-airi/stage-shared'
+import type { Tool } from '@xsai/shared-chat'
+
+import type { VoiceProfileLearningResult, VoiceUserProfile } from './discord-voice-profile'
 
 import { useElectronEventaInvoke } from '@proj-airi/electron-vueuse'
 import {
@@ -22,15 +25,20 @@ import { useLocalStorageManualReset } from '@proj-airi/stage-shared/composables'
 import { defineStore } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, toRaw, watch } from 'vue'
 
+import * as v from 'valibot'
+
 import { stripMarkers } from '../../composables/response-categoriser'
 import { useBackgroundStore } from '../background'
 import { useChatOrchestratorStore } from '../chat'
 import { useChatSessionStore } from '../chat/session-store'
+import { useLLM } from '../llm'
+import { useTextJournalStore } from '../memory-text-journal'
 import { useProvidersStore } from '../providers'
 import { useAiriCardStore } from './airi-card'
 import { useArtistryStore } from './artistry'
 import { useAutonomousArtistryStore } from './artistry-autonomous'
 import { useConsciousnessStore } from './consciousness'
+import { applyVoiceProfileLearning, buildVoiceMemoryDirective, upsertVoiceProfileFromTranscript } from './discord-voice-profile'
 import { useHearingStore } from './hearing'
 import { useLiveSessionStore } from './live-session'
 import { useSpeechStore } from './speech'
@@ -51,7 +59,7 @@ const MAX_EVENT_LOG_ENTRIES = 200
 
 // ── Slash Command Definitions ──────────────────────────────────────────────────
 
-const COMMANDS_VERSION = 9
+const COMMANDS_VERSION = 10
 const CORE_COMMANDS: DiscordCommandDefinition[] = [
   {
     name: 'status',
@@ -129,6 +137,62 @@ const CORE_COMMANDS: DiscordCommandDefinition[] = [
   {
     name: 'leave',
     description: 'Disconnect the bot from the voice channel',
+  },
+  {
+    name: 'profile',
+    description: 'Show what AIRI remembers about your Discord voice profile',
+  },
+  {
+    name: 'profile-set',
+    description: 'Update how AIRI should address and remember you',
+    options: [
+      {
+        name: 'address_as',
+        description: 'What AIRI should call you',
+        type: 3, // String
+        required: false,
+      },
+      {
+        name: 'notes',
+        description: 'Durable profile notes to inject when you speak',
+        type: 3, // String
+        required: false,
+      },
+    ],
+  },
+  {
+    name: 'remember',
+    description: 'Save a durable memory for the active AIRI character',
+    options: [
+      {
+        name: 'text',
+        description: 'The memory AIRI should save',
+        type: 3, // String
+        required: true,
+      },
+    ],
+  },
+  {
+    name: 'recall',
+    description: 'Search AIRI long-term memory',
+    options: [
+      {
+        name: 'query',
+        description: 'What memory should AIRI search for?',
+        type: 3, // String
+        required: true,
+      },
+      {
+        name: 'limit',
+        description: 'Maximum results to return (default 3)',
+        type: 4, // Integer
+        required: false,
+      },
+    ],
+  },
+  {
+    name: 'voiceconfig',
+    description: 'Show the current Discord voice and memory configuration',
   },
   {
     name: 'look',
@@ -229,6 +293,8 @@ export const useDiscordStore = defineStore('discord', () => {
   const chatSession = useChatSessionStore()
   const chatOrchestrator = useChatOrchestratorStore()
   const airiCard = useAiriCardStore()
+  const llmStore = useLLM()
+  const textJournalStore = useTextJournalStore()
   const artistryStore = useArtistryStore()
   const artistryAutonomousStore = useAutonomousArtistryStore()
   const consciousnessStore = useConsciousnessStore()
@@ -268,24 +334,20 @@ export const useDiscordStore = defineStore('discord', () => {
     'settings/discord/voice/reply-language-prompt',
     'Hãy luôn trả lời bằng tiếng Việt tự nhiên. Có thể xen lẫn từ tiếng Anh khi phù hợp ngữ cảnh, nhưng phần lớn câu trả lời phải là tiếng Việt.',
   )
+  const voiceAutoLearnProfiles = useLocalStorageManualReset<boolean>('settings/discord/voice/auto-learn-profiles', true)
+  const voiceMemoryToolsEnabled = useLocalStorageManualReset<boolean>('settings/discord/voice/memory-tools-enabled', true)
+  const voiceMemoryPrompt = useLocalStorageManualReset<string>('settings/discord/voice/memory-prompt', '')
 
   // Per-user voice profiles. Maps Discord userId → display name + free-form notes that
   // get injected into the LLM context whenever that user speaks. Lets AIRI greet
   // people by name and remember preferences without a heavy memory subsystem.
-  interface VoiceUserProfile {
-    userId: string
-    displayName: string
-    /** What the assistant should call this user (defaults to displayName). */
-    addressAs?: string
-    /** Free-form notes (relationship, language preference, inside jokes…). Injected before each voice turn. */
-    notes?: string
-    /** ISO timestamp of last interaction (for stale cleanup later). */
-    lastSeen: number
-  }
   const voiceUserProfiles = useLocalStorageManualReset<Record<string, VoiceUserProfile>>(
     'settings/discord/voice/user-profiles',
     {},
   )
+
+  type ToolFactory = () => Promise<Tool[] | undefined>
+  const registeredTools = ref<(Tool | ToolFactory)[]>([])
 
   const pendingCollectBatch = ref<{ formattedContent: string, attachments: any[], msg: DiscordInboundMessage }[]>([])
   let collectTimer: ReturnType<typeof setTimeout> | null = null
@@ -302,6 +364,7 @@ export const useDiscordStore = defineStore('discord', () => {
 
     void chatOrchestrator.ingest(combinedContent, {
       attachments: combinedAttachments,
+      tools: resolveDiscordTools(),
       metadata: {
         _discordSource: {
           messageId: lastMsg.messageId,
@@ -414,6 +477,127 @@ export const useDiscordStore = defineStore('discord', () => {
     }
   }
 
+  const voiceProfileLearningSchema = v.object({
+    shouldUpdate: v.boolean(),
+    addressAs: v.string(),
+    notes: v.string(),
+  })
+
+  function registerTools(tools: Tool | Tool[] | ToolFactory) {
+    if (Array.isArray(tools)) {
+      registeredTools.value.push(...tools)
+    }
+    else {
+      registeredTools.value.push(tools)
+    }
+  }
+
+  async function resolveRegisteredTools(): Promise<Tool[]> {
+    const all: Tool[] = []
+    for (const entry of registeredTools.value) {
+      if (typeof entry === 'function') {
+        const resolved = await entry()
+        if (resolved)
+          all.push(...resolved)
+      }
+      else {
+        all.push(entry)
+      }
+    }
+    return all
+  }
+
+  function resolveDiscordTools() {
+    return voiceMemoryToolsEnabled.value ? resolveRegisteredTools : undefined
+  }
+
+  function truncateDiscordText(text: string, max = 1900) {
+    if (text.length <= max)
+      return text
+    return `${text.slice(0, max - 3).trimEnd()}...`
+  }
+
+  function upsertVoiceProfile(userId: string, patch: Partial<{ displayName: string, addressAs: string, notes: string }>) {
+    const existing = voiceUserProfiles.value[userId]
+    voiceUserProfiles.value = {
+      ...voiceUserProfiles.value,
+      [userId]: {
+        userId,
+        displayName: patch.displayName ?? existing?.displayName ?? userId,
+        addressAs: patch.addressAs ?? existing?.addressAs,
+        notes: patch.notes ?? existing?.notes,
+        lastSeen: existing?.lastSeen ?? Date.now(),
+      },
+    }
+  }
+
+  function deleteVoiceProfile(userId: string) {
+    const next = { ...voiceUserProfiles.value }
+    delete next[userId]
+    voiceUserProfiles.value = next
+  }
+
+  async function learnVoiceProfileFromTranscript(transcript: DiscordVoiceTranscript, profile: VoiceUserProfile) {
+    if (!voiceAutoLearnProfiles.value)
+      return
+    if (!transcript.text.trim())
+      return
+
+    const providerId = consciousnessStore.activeProvider
+    const model = consciousnessStore.activeModel
+    if (!providerId || !model)
+      return
+
+    try {
+      const provider = await providersStore.getProviderInstance(providerId)
+      if (!provider)
+        return
+
+      const prompt = [
+        'You maintain a compact Discord voice profile for one user.',
+        'Extract only durable facts from the latest transcript.',
+        'Durable facts include stable identity details, preferred names, language preference, project context, recurring preferences, relationship context, and inside jokes.',
+        'Do not store secrets, tokens, credentials, one-off commands, temporary task requests, or sensitive private details.',
+        'If there is nothing durable to add, set shouldUpdate=false and leave addressAs/notes empty.',
+        '',
+        `Discord userId: ${transcript.userId}`,
+        `Discord username: ${transcript.username}`,
+        `Display name: ${profile.displayName}`,
+        `Current addressAs: ${profile.addressAs ?? ''}`,
+        `Current notes:\n${profile.notes ?? ''}`,
+        '',
+        `Latest voice transcript:\n${transcript.text.slice(0, 1200)}`,
+      ].join('\n')
+
+      const result = await llmStore.generateObject<VoiceProfileLearningResult>(
+        model,
+        provider as any,
+        {
+          messages: [{ role: 'user', content: prompt }],
+          schema: voiceProfileLearningSchema,
+        },
+      )
+
+      const latest = voiceUserProfiles.value[transcript.userId] ?? profile
+      const next = applyVoiceProfileLearning(latest, result)
+      if (next === latest)
+        return
+
+      voiceUserProfiles.value = {
+        ...voiceUserProfiles.value,
+        [transcript.userId]: next,
+      }
+      eventLog.value = [...eventLog.value.slice(-(MAX_EVENT_LOG_ENTRIES - 1)), {
+        timestamp: Date.now(),
+        type: 'VOICE_PROFILE_LEARN',
+        summary: `Updated voice profile for ${next.displayName}`,
+      }]
+    }
+    catch (err) {
+      console.warn('[DiscordStore] Voice profile auto-learn skipped:', err)
+    }
+  }
+
   // ── Routing Cache ──────────────────────────────────────────────────────────
   const lastChannelId = ref<string | null>(null)
   const audioTurnBuffer = ref<ArrayBuffer[]>([])
@@ -448,12 +632,12 @@ export const useDiscordStore = defineStore('discord', () => {
       return
 
     if (!force && lastRegisteredVersion.value >= COMMANDS_VERSION) {
-      console.log(`[DiscordStore] Slash commands are up to date (v${lastRegisteredVersion.value})`)
+      console.info(`[DiscordStore] Slash commands are up to date (v${lastRegisteredVersion.value})`)
       return
     }
 
     try {
-      console.log(`[DiscordStore] Registering slash commands (v${COMMANDS_VERSION})...`)
+      console.info(`[DiscordStore] Registering slash commands (v${COMMANDS_VERSION})...`)
       await invokeRegisterCommands({ commands: CORE_COMMANDS })
       lastRegisteredVersion.value = COMMANDS_VERSION
     }
@@ -514,7 +698,7 @@ export const useDiscordStore = defineStore('discord', () => {
   function addAudioToTurn(buffer: ArrayBuffer) {
     if (buffer.byteLength === 0)
       return
-    console.log(`[DiscordStore] Aggregating audio chunk: ${Math.round(buffer.byteLength / 1024)}KB`)
+    console.info(`[DiscordStore] Aggregating audio chunk: ${Math.round(buffer.byteLength / 1024)}KB`)
     audioTurnBuffer.value.push(buffer)
 
     // Real-time fan-out to the active voice channel: if we're in a VC, push the
@@ -530,12 +714,12 @@ export const useDiscordStore = defineStore('discord', () => {
 
   async function flushAudioTurn(content?: string) {
     if (audioTurnBuffer.value.length === 0 || !lastChannelId.value) {
-      console.log('[DiscordStore] Flush skipped: Bucket empty.')
+      console.info('[DiscordStore] Flush skipped: Bucket empty.')
       return
     }
 
     const channelId = lastChannelId.value
-    console.log(`[DiscordStore] FLUSHING Voice Note: ${audioTurnBuffer.value.length} chunks to ${channelId}`)
+    console.info(`[DiscordStore] FLUSHING Voice Note: ${audioTurnBuffer.value.length} chunks to ${channelId}`)
 
     try {
       const channelName = 'eventa:invoke:electron:discord:send-voice-note'
@@ -555,7 +739,7 @@ export const useDiscordStore = defineStore('discord', () => {
         },
       )
 
-      console.log('[DiscordStore] Voice Note IPC successful. Result:', result)
+      console.info('[DiscordStore] Voice Note IPC successful. Result:', result)
     }
     catch (err) {
       console.error('[DiscordStore] Voice Note delivery failed:', err)
@@ -566,12 +750,12 @@ export const useDiscordStore = defineStore('discord', () => {
   }
 
   function clearAudioTurn() {
-    console.log('[DiscordStore] Clearing audio turn bucket.')
+    console.info('[DiscordStore] Clearing audio turn bucket.')
     audioTurnBuffer.value = []
   }
 
   async function sendImageToDiscord(channelId: string, base64: string, content?: string, filename?: string) {
-    console.log(`[DiscordStore] Preparing to invoke IPC sendImage. Channel: ${channelId}, Payload Size: ${Math.round(base64.length / 1024)}KB, Shape: ${base64.substring(0, 30)}...`)
+    console.info(`[DiscordStore] Preparing to invoke IPC sendImage. Channel: ${channelId}, Payload Size: ${Math.round(base64.length / 1024)}KB, Shape: ${base64.substring(0, 30)}...`)
 
     if (!invokeSendImage) {
       console.error('[DiscordStore] IPC Invoker "invokeSendImage" is NULL! Are you in a browser instead of Electron?')
@@ -581,7 +765,7 @@ export const useDiscordStore = defineStore('discord', () => {
     try {
       lastChannelId.value = channelId
       const channelName = 'eventa:invoke:electron:discord:send-image'
-      console.log(`[DiscordStore] NATIVE BYPASS: Invoking ${channelName}. Shape: ${base64.substring(0, 50)}...`)
+      console.info(`[DiscordStore] NATIVE BYPASS: Invoking ${channelName}. Shape: ${base64.substring(0, 50)}...`)
 
       // We bypass the wrapper and use the literal channel name to avoid "undefined" contract issues
       const result = await (window as any).electron?.ipcRenderer?.invoke(
@@ -589,7 +773,7 @@ export const useDiscordStore = defineStore('discord', () => {
         toRaw({ channelId, base64, content, filename }),
       )
 
-      console.log('[DiscordStore] Native IPC successful. Result:', result)
+      console.info('[DiscordStore] Native IPC successful. Result:', result)
     }
     catch (err) {
       console.error('[DiscordStore] Send image failed during IPC invoke:', err)
@@ -627,7 +811,7 @@ export const useDiscordStore = defineStore('discord', () => {
     if (!ipcRenderer)
       return
 
-    console.log('[DiscordStore] Initializing IPC listeners...')
+    console.info('[DiscordStore] Initializing IPC listeners...')
 
     const onStatusChanged = (_event: any, status: DiscordServiceStatus) => {
       serviceStatus.value = status
@@ -638,7 +822,7 @@ export const useDiscordStore = defineStore('discord', () => {
     }
 
     const onInboundMessage = (_event: any, msg: DiscordInboundMessage) => {
-      console.log(`[DiscordStore] Inbound message received: ${msg.messageId.slice(-6)} from ${msg.username}`)
+      console.info(`[DiscordStore] Inbound message received: ${msg.messageId.slice(-6)} from ${msg.username}`)
 
       // 0. Deduplicate by ID within this window process
       if (processedMessageIds.has(msg.messageId))
@@ -653,11 +837,11 @@ export const useDiscordStore = defineStore('discord', () => {
       const isStage = hash === '#/' || hash.startsWith('#/stage')
 
       if (!isStage) {
-        console.log(`[DiscordStore] Skipping Brain handover: Window (${hash}) is not Stage.`)
+        console.info(`[DiscordStore] Skipping Brain handover: Window (${hash}) is not Stage.`)
         return
       }
 
-      console.log(`[DiscordStore] Handing over message ${msg.messageId.slice(-6)} to Brain...`)
+      console.info(`[DiscordStore] Handing over message ${msg.messageId.slice(-6)} to Brain...`)
 
       // 3. BRAIN HANDOVER (Stage only)
       const handoverEntry: DiscordEventLogEntry = {
@@ -690,7 +874,7 @@ export const useDiscordStore = defineStore('discord', () => {
       }
 
       if (chatMode.value === 'steer' && chatOrchestrator.sending) {
-        console.log(`[DiscordStore] Steer mode active. Aborting current generation and rolling up context.`)
+        console.info(`[DiscordStore] Steer mode active. Aborting current generation and rolling up context.`)
         const partialText = chatOrchestrator.streamingMessage?.content || ''
 
         chatSession.bumpSessionGeneration(chatSession.activeSessionId)
@@ -702,6 +886,7 @@ export const useDiscordStore = defineStore('discord', () => {
         setTimeout(() => {
           void chatOrchestrator.ingest(steerContent, {
             attachments,
+            tools: resolveDiscordTools(),
             metadata: {
               _discordSource: {
                 messageId: msg.messageId,
@@ -717,6 +902,7 @@ export const useDiscordStore = defineStore('discord', () => {
 
       void chatOrchestrator.ingest(formattedContent, {
         attachments,
+        tools: resolveDiscordTools(),
         metadata: {
           _discordSource: {
             messageId: msg.messageId,
@@ -733,14 +919,14 @@ export const useDiscordStore = defineStore('discord', () => {
       if (!source?.channelId)
         return
 
-      console.log(`[DiscordStore] Outbound response ready for ${source.username} in channel ${source.channelId.slice(-4)}`)
+      console.info(`[DiscordStore] Outbound response ready for ${source.username} in channel ${source.channelId.slice(-4)}`)
 
       // Leadership Election: Only the "Stage" window handles the Outbound reply
       const hash = window.location.hash || '#/'
       const isStage = hash === '#/' || hash.startsWith('#/stage')
 
       if (!isStage) {
-        console.log(`[DiscordStore] Skipping Outbound: Window (${hash}) is not Stage.`)
+        console.info(`[DiscordStore] Skipping Outbound: Window (${hash}) is not Stage.`)
         return
       }
 
@@ -764,7 +950,7 @@ export const useDiscordStore = defineStore('discord', () => {
         await sendMessageToDiscord(source.channelId, technicalFeedback)
 
         if (typingHeartbeat) {
-          console.log('[DiscordStore] Turn complete (ERROR), clearing typing heartbeat.')
+          console.info('[DiscordStore] Turn complete (ERROR), clearing typing heartbeat.')
           clearInterval(typingHeartbeat)
           typingHeartbeat = null
         }
@@ -798,7 +984,7 @@ export const useDiscordStore = defineStore('discord', () => {
         return
 
       if (typingHeartbeat) {
-        console.log('[DiscordStore] Stream ended, clearing typing heartbeat.')
+        console.info('[DiscordStore] Stream ended, clearing typing heartbeat.')
         clearInterval(typingHeartbeat)
         typingHeartbeat = null
       }
@@ -810,11 +996,11 @@ export const useDiscordStore = defineStore('discord', () => {
       const hash = window.location.hash || '#/'
       const isStage = hash === '#/' || hash.startsWith('#/stage')
       if (!isStage) {
-        console.log(`[DiscordStore] Ignoring interaction ${payload.interactionId}: Not the leader window.`)
+        console.info(`[DiscordStore] Ignoring interaction ${payload.interactionId}: Not the leader window.`)
         return
       }
 
-      console.log(`[DiscordStore] Handling interaction: /${payload.commandName} (${payload.interactionId})`)
+      console.info(`[DiscordStore] Handling interaction: /${payload.commandName} (${payload.interactionId})`)
 
       // Keep channel context updated for things like image routing (e.g. /imagine)
       if (payload.channelId) {
@@ -926,6 +1112,7 @@ export const useDiscordStore = defineStore('discord', () => {
         if (initialMessage) {
           // If they provided a message, send it immediately
           await chatOrchestrator.ingest(initialMessage, {
+            tools: resolveDiscordTools(),
             metadata: { _discordSource: payload },
           })
         }
@@ -1088,6 +1275,144 @@ export const useDiscordStore = defineStore('discord', () => {
             content: `❌ Failed to leave voice channel: ${err?.message ?? 'unknown error'}`,
           })
         }
+      }
+      else if (payload.commandName === 'profile') {
+        const profile = voiceUserProfiles.value[payload.userId] ?? {
+          userId: payload.userId,
+          displayName: payload.username,
+          lastSeen: Date.now(),
+        }
+
+        const content = [
+          `**Voice Profile: ${profile.displayName}**`,
+          `Address as: ${profile.addressAs?.trim() || profile.displayName}`,
+          `Last seen: ${new Date(profile.lastSeen).toLocaleString()}`,
+          '',
+          '**Notes**',
+          profile.notes?.trim() || '_No profile notes yet._',
+        ].join('\n')
+
+        await invokeReplyInteraction?.({
+          interactionId: payload.interactionId,
+          content: truncateDiscordText(content),
+          ephemeral: true,
+        })
+      }
+      else if (payload.commandName === 'profile-set') {
+        const addressAs = String(payload.options.address_as ?? '').trim()
+        const notes = String(payload.options.notes ?? '').trim()
+
+        if (!addressAs && !notes) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: 'Provide `address_as`, `notes`, or both.',
+            ephemeral: true,
+          })
+          return
+        }
+
+        upsertVoiceProfile(payload.userId, {
+          displayName: payload.username,
+          addressAs: addressAs || undefined,
+          notes: notes || undefined,
+        })
+
+        await invokeReplyInteraction?.({
+          interactionId: payload.interactionId,
+          content: 'Voice profile updated.',
+          ephemeral: true,
+        })
+      }
+      else if (payload.commandName === 'remember') {
+        const text = String(payload.options.text ?? '').trim()
+        if (!text) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: 'Nothing to remember. Provide the `text` option.',
+            ephemeral: true,
+          })
+          return
+        }
+
+        try {
+          const entry = await textJournalStore.createEntry({
+            title: `Discord memory: ${payload.username}`,
+            content: text,
+            source: 'user',
+          })
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: `Saved memory "${entry.title}" for ${entry.characterName}.`,
+            ephemeral: true,
+          })
+        }
+        catch (err: any) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: `Failed to save memory: ${err?.message ?? 'unknown error'}`,
+            ephemeral: true,
+          })
+        }
+      }
+      else if (payload.commandName === 'recall') {
+        const query = String(payload.options.query ?? '').trim()
+        const limit = Math.max(1, Math.min(5, Number(payload.options.limit ?? 3) || 3))
+
+        if (!query) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: 'Provide the `query` option.',
+            ephemeral: true,
+          })
+          return
+        }
+
+        try {
+          const entries = await textJournalStore.searchEntries({ query, limit })
+          const content = entries.length === 0
+            ? `No memory found for "${query}".`
+            : [
+                `**Memory results for:** ${query}`,
+                '',
+                ...entries.map((entry, index) => [
+                  `**${index + 1}. ${entry.title}**`,
+                  `Character: ${entry.characterName}`,
+                  truncateDiscordText(entry.content, 500),
+                ].join('\n')),
+              ].join('\n\n')
+
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: truncateDiscordText(content),
+            ephemeral: true,
+          })
+        }
+        catch (err: any) {
+          await invokeReplyInteraction?.({
+            interactionId: payload.interactionId,
+            content: `Failed to search memory: ${err?.message ?? 'unknown error'}`,
+            ephemeral: true,
+          })
+        }
+      }
+      else if (payload.commandName === 'voiceconfig') {
+        const stt = resolveSttConfig()
+        const content = [
+          '**Discord Voice Config**',
+          `Voice enabled: ${voiceEnabled.value ? 'ON' : 'OFF'}`,
+          `Voice connected: ${voiceState.value.connected ? `YES (${voiceState.value.channelName ?? 'voice channel'})` : 'NO'}`,
+          `Mute local TTS: ${voiceMuteLocalTts.value ? 'ON' : 'OFF'}`,
+          `STT: ${stt ? `${stt.model} (${stt.language || 'auto'})` : 'not configured'}`,
+          `Auto-learn profiles: ${voiceAutoLearnProfiles.value ? 'ON' : 'OFF'}`,
+          `Memory tools: ${voiceMemoryToolsEnabled.value ? 'ON' : 'OFF'}`,
+          `Reply language prompt: ${voiceReplyLanguagePrompt.value.trim() ? 'set' : 'disabled'}`,
+        ].join('\n')
+
+        await invokeReplyInteraction?.({
+          interactionId: payload.interactionId,
+          content,
+          ephemeral: true,
+        })
       }
       else if (payload.commandName === 'look') {
         if (!isElectron) {
@@ -1259,25 +1584,17 @@ export const useDiscordStore = defineStore('discord', () => {
         lastChannelId.value = transcript.channelId
 
       // Touch / upsert the user's voice profile so AIRI can call them by name.
-      // We only stamp `lastSeen`; the user can fill in `addressAs`/`notes` from
-      // the Discord settings page (or via a future `/profile` command).
-      const existingProfile = voiceUserProfiles.value[transcript.userId]
-      voiceUserProfiles.value = {
-        ...voiceUserProfiles.value,
-        [transcript.userId]: {
-          userId: transcript.userId,
-          displayName: transcript.displayName || transcript.username,
-          addressAs: existingProfile?.addressAs,
-          notes: existingProfile?.notes,
-          lastSeen: transcript.endedAt,
-        },
-      }
+      voiceUserProfiles.value = upsertVoiceProfileFromTranscript(voiceUserProfiles.value, transcript)
 
       // Build a compact speaker preamble. We localize the scaffolding to Vietnamese
       // because LLMs are sensitive to the language of surrounding context — a
       // mostly-English wrapper around a Vietnamese transcript causes them to drift
       // back to English on follow-up turns.
-      const profile = voiceUserProfiles.value[transcript.userId]
+      const profile = voiceUserProfiles.value[transcript.userId] ?? {
+        userId: transcript.userId,
+        displayName: transcript.displayName || transcript.username,
+        lastSeen: transcript.endedAt,
+      }
       const addressAs = profile?.addressAs?.trim() || profile?.displayName || transcript.username
       const speakerLine = profile?.notes?.trim()
         ? `[Người nói: ${addressAs} (${transcript.userId.slice(-6)}). Ghi chú: ${profile.notes.trim()}]`
@@ -1285,14 +1602,22 @@ export const useDiscordStore = defineStore('discord', () => {
 
       const directive = voiceReplyLanguagePrompt.value?.trim()
       const directiveLine = directive ? `[Chỉ dẫn: ${directive}]` : ''
+      const memoryDirectiveLine = buildVoiceMemoryDirective(
+        voiceMemoryToolsEnabled.value,
+        voiceMemoryPrompt.value,
+      )
 
       const formatted = [
         directiveLine,
+        memoryDirectiveLine,
         speakerLine,
         `${addressAs} (qua voice) nói: ${transcript.text}`,
       ].filter(Boolean).join('\n')
 
+      void learnVoiceProfileFromTranscript(transcript, profile)
+
       void chatOrchestrator.ingest(formatted, {
+        tools: resolveDiscordTools(),
         metadata: {
           _discordSource: {
             messageId: `voice-${transcript.endedAt}-${transcript.userId}`,
@@ -1310,7 +1635,7 @@ export const useDiscordStore = defineStore('discord', () => {
     const onBeforeSend = async (_message: string, options: any) => {
       // ── VERIFICATION LOGS ──
       // We log the structure to confirm where _discordSource actually lives
-      console.log('[DiscordStore] onBeforeSend triggered. Context Structure:', {
+      console.info('[DiscordStore] onBeforeSend triggered. Context Structure:', {
         hasMessage: !!options?.message,
         messageKeys: options?.message ? Object.keys(options.message) : [],
         hasMetadata: !!options?.metadata,
@@ -1319,14 +1644,14 @@ export const useDiscordStore = defineStore('discord', () => {
 
       const source = options?.message?._discordSource
       if (source?.channelId) {
-        console.log(`[DiscordStore] Discord Source Detected: channel=${source.channelId}, user=${source.username}`)
+        console.info(`[DiscordStore] Discord Source Detected: channel=${source.channelId}, user=${source.username}`)
 
         // Leadership Election: Only Stage window sends the typing indicator
         const hash = window.location.hash || '#/'
         const isStage = hash === '#/' || hash.startsWith('#/stage')
 
         if (isStage && invokeSendTyping) {
-          console.log(`[DiscordStore] Starting typing heartbeat for channel ${source.channelId.slice(-4)}`)
+          console.info(`[DiscordStore] Starting typing heartbeat for channel ${source.channelId.slice(-4)}`)
 
           // Initial trigger
           await invokeSendTyping({ channelId: source.channelId }).catch(() => {})
@@ -1337,17 +1662,17 @@ export const useDiscordStore = defineStore('discord', () => {
 
           typingHeartbeat = setInterval(async () => {
             if (invokeSendTyping && source.channelId) {
-              console.log(`[DiscordStore] Typing heartbeat tick for ${source.channelId.slice(-4)}`)
+              console.info(`[DiscordStore] Typing heartbeat tick for ${source.channelId.slice(-4)}`)
               await invokeSendTyping({ channelId: source.channelId }).catch(() => {})
             }
           }, 7000)
         }
         else {
-          console.log(`[DiscordStore] Typing skipped: isStage=${isStage}, hasInvoker=${!!invokeSendTyping}`)
+          console.info(`[DiscordStore] Typing skipped: isStage=${isStage}, hasInvoker=${!!invokeSendTyping}`)
         }
       }
       else {
-        console.log('[DiscordStore] No Discord source found in message metadata.')
+        console.info('[DiscordStore] No Discord source found in message metadata.')
       }
     }
 
@@ -1359,7 +1684,7 @@ export const useDiscordStore = defineStore('discord', () => {
 
     const backgroundStore = useBackgroundStore()
     const cleanupBackgroundHook = backgroundStore.onBackgroundAdded(async (entry) => {
-      console.log(`[DiscordStore] Background detected: ${entry.id} (${entry.type})`)
+      console.info(`[DiscordStore] Background detected: ${entry.id} (${entry.type})`)
 
       // 1. Detection Log
       const detectLog: DiscordEventLogEntry = {
@@ -1373,11 +1698,11 @@ export const useDiscordStore = defineStore('discord', () => {
       if (entry.type !== 'journal' && entry.type !== 'selfie')
         return
 
-      console.log('[DiscordStore] Candidate image for Discord routing found.')
+      console.info('[DiscordStore] Candidate image for Discord routing found.')
 
       // 2. Connection/Channel Check
       if (!isConnected.value || !lastChannelId.value) {
-        console.log(`[DiscordStore] Skipping image routing: isConnected=${isConnected.value}, lastChannelId=${lastChannelId.value}`)
+        console.info(`[DiscordStore] Skipping image routing: isConnected=${isConnected.value}, lastChannelId=${lastChannelId.value}`)
         const failLog: DiscordEventLogEntry = {
           timestamp: Date.now(),
           type: 'image-debug-log',
@@ -1392,7 +1717,7 @@ export const useDiscordStore = defineStore('discord', () => {
       const isStage = hash === '#/' || hash.startsWith('#/stage')
 
       if (!isStage) {
-        console.log(`[DiscordStore] Skipping image routing: Window (${hash}) is not Stage leader.`)
+        console.info(`[DiscordStore] Skipping image routing: Window (${hash}) is not Stage leader.`)
         const leaderLog: DiscordEventLogEntry = {
           timestamp: Date.now(),
           type: 'image-debug-log',
@@ -1403,7 +1728,7 @@ export const useDiscordStore = defineStore('discord', () => {
       }
 
       try {
-        console.log(`[DiscordStore] Routing image to Discord: ${entry.title}`)
+        console.info(`[DiscordStore] Routing image to Discord: ${entry.title}`)
         const routeLog: DiscordEventLogEntry = {
           timestamp: Date.now(),
           type: 'IMAGE_ROUTE',
@@ -1487,7 +1812,7 @@ export const useDiscordStore = defineStore('discord', () => {
   // Automatically sync commands once we actually connect
   watch(isConnected, (connected) => {
     if (connected) {
-      console.log('[DiscordStore] Service connected, triggering command sync...')
+      console.info('[DiscordStore] Service connected, triggering command sync...')
       void syncCommands()
     }
   })
@@ -1538,7 +1863,11 @@ export const useDiscordStore = defineStore('discord', () => {
     voiceSttLanguage,
     voiceSttPrompt,
     voiceReplyLanguagePrompt,
+    voiceAutoLearnProfiles,
+    voiceMemoryToolsEnabled,
+    voiceMemoryPrompt,
     voiceUserProfiles,
+    registeredTools,
 
     // Live State
     serviceStatus,
@@ -1560,6 +1889,8 @@ export const useDiscordStore = defineStore('discord', () => {
     clearAudioTurn,
     clearEventLog,
     resetState,
+    registerTools,
+    resolveRegisteredTools,
     leaveVoice: async () => {
       if (!invokeVoiceLeave)
         return
@@ -1569,23 +1900,7 @@ export const useDiscordStore = defineStore('discord', () => {
      * Update or create a per-user voice profile. Use this to teach AIRI how to
      * address a specific Discord user and what to remember about them.
      */
-    upsertVoiceProfile(userId: string, patch: Partial<{ displayName: string, addressAs: string, notes: string }>) {
-      const existing = voiceUserProfiles.value[userId]
-      voiceUserProfiles.value = {
-        ...voiceUserProfiles.value,
-        [userId]: {
-          userId,
-          displayName: patch.displayName ?? existing?.displayName ?? userId,
-          addressAs: patch.addressAs ?? existing?.addressAs,
-          notes: patch.notes ?? existing?.notes,
-          lastSeen: existing?.lastSeen ?? Date.now(),
-        },
-      }
-    },
-    deleteVoiceProfile(userId: string) {
-      const next = { ...voiceUserProfiles.value }
-      delete next[userId]
-      voiceUserProfiles.value = next
-    },
+    upsertVoiceProfile,
+    deleteVoiceProfile,
   }
 })
