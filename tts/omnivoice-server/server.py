@@ -35,6 +35,7 @@ import torch
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from generation_options import build_omnivoice_generation_kwargs
 from voice_refs import list_voice_references, read_reference_text, resolve_voice_reference
 
 logging.basicConfig(level=logging.INFO)
@@ -216,7 +217,16 @@ class SpeechRequest(BaseModel):
     response_format: str = Field(default="wav", description="Output: wav, pcm, mp3, flac")
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
     # Extensions
-    num_steps: Optional[int] = Field(default=None, description="OmniVoice diffusion steps")
+    num_steps: Optional[int] = Field(default=None, ge=1, le=128, description="OmniVoice diffusion steps")
+    language: Optional[str] = Field(default=None, description="OmniVoice language hint, e.g. en or vi")
+    guidance_scale: Optional[float] = Field(default=None, ge=0.0, le=10.0, description="OmniVoice CFG scale")
+    position_temperature: Optional[float] = Field(default=None, ge=0.0, le=10.0, description="OmniVoice position sampling temperature")
+    class_temperature: Optional[float] = Field(default=None, ge=0.0, le=10.0, description="OmniVoice token sampling temperature")
+    preprocess_prompt: Optional[bool] = Field(default=None, description="Whether OmniVoice preprocesses the reference prompt")
+    postprocess_output: Optional[bool] = Field(default=None, description="Whether OmniVoice post-processes generated audio")
+    denoise: Optional[bool] = Field(default=None, description="Whether OmniVoice adds the denoise token for cloned prompts")
+    audio_chunk_duration: Optional[float] = Field(default=None, ge=0.0, description="OmniVoice chunk duration for long text")
+    audio_chunk_threshold: Optional[float] = Field(default=None, ge=0.0, description="OmniVoice long-text chunking threshold")
     ref_audio: Optional[str] = Field(default=None, description="Override ref audio path")
     ref_text: Optional[str] = Field(default=None, description="Override ref text")
 
@@ -326,11 +336,7 @@ def _generate_omnivoice(request: SpeechRequest) -> np.ndarray:
     if request.ref_text:
         ref_text = request.ref_text
 
-    kwargs = {
-        "text": request.input,
-        "num_step": request.num_steps or NUM_STEPS,
-        "speed": request.speed,
-    }
+    kwargs = build_omnivoice_generation_kwargs(request, NUM_STEPS)
 
     if ref_audio and os.path.exists(ref_audio):
         kwargs["ref_audio"] = ref_audio

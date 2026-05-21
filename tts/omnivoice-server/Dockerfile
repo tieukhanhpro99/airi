@@ -39,6 +39,7 @@ RUN pip install --no-cache-dir \
 # Copy server code
 WORKDIR /app
 COPY server.py /app/server.py
+COPY generation_options.py /app/generation_options.py
 COPY voice_refs.py /app/voice_refs.py
 
 # Reference audio directory (mounted at runtime)

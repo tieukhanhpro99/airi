@@ -9,7 +9,7 @@ import {
 import { useProviderValidation } from '@proj-airi/stage-ui/composables/use-provider-validation'
 import { useSpeechStore } from '@proj-airi/stage-ui/stores/modules/speech'
 import { useProvidersStore } from '@proj-airi/stage-ui/stores/providers'
-import { FieldInput, FieldRange } from '@proj-airi/ui'
+import { FieldCheckbox, FieldInput, FieldRange } from '@proj-airi/ui'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -33,6 +33,12 @@ const speed = ref<number>(
   || (providers.value[providerId] as any)?.speed
   || defaultVoiceSettings.speed,
 )
+const language = ref<string>((providers.value[providerId] as any)?.language || '')
+const numSteps = ref<number | undefined>(optionalNumber((providers.value[providerId] as any)?.numSteps))
+const guidanceScale = ref<number | undefined>(optionalNumber((providers.value[providerId] as any)?.guidanceScale))
+const positionTemperature = ref<number | undefined>(optionalNumber((providers.value[providerId] as any)?.positionTemperature))
+const preprocessPrompt = ref<boolean>((providers.value[providerId] as any)?.preprocessPrompt ?? true)
+const denoise = ref<boolean>((providers.value[providerId] as any)?.denoise ?? true)
 
 // Model selection
 const model = computed({
@@ -53,6 +59,24 @@ const voice = computed({
   },
 })
 
+function optionalNumber(value: unknown): number | undefined {
+  if (value === '' || value == null)
+    return undefined
+
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function setOptionalProviderConfig(key: string, value: unknown) {
+  if (!providers.value[providerId])
+    providers.value[providerId] = {}
+
+  if (value === '' || value == null)
+    delete providers.value[providerId][key]
+  else
+    providers.value[providerId][key] = value
+}
+
 // TODO: use `useRefHistory` for this
 // Watch provider config changes to sync local refs (for reset functionality)
 watch(
@@ -65,6 +89,13 @@ watch(
       if (Math.abs(speed.value - newSpeed) > 0.001) // Use small epsilon for float comparison
         speed.value = newSpeed
 
+      language.value = config.language || ''
+      numSteps.value = optionalNumber(config.numSteps)
+      guidanceScale.value = optionalNumber(config.guidanceScale)
+      positionTemperature.value = optionalNumber(config.positionTemperature)
+      preprocessPrompt.value = config.preprocessPrompt ?? true
+      denoise.value = config.denoise ?? true
+
       // Sync model if it was reset
       if (!config.model && model.value !== defaultModel)
         model.value = defaultModel
@@ -76,6 +107,12 @@ watch(
     else {
       // Provider config was reset, reset our local refs to defaults
       speed.value = defaultVoiceSettings.speed
+      language.value = ''
+      numSteps.value = undefined
+      guidanceScale.value = undefined
+      positionTemperature.value = undefined
+      preprocessPrompt.value = true
+      denoise.value = true
       model.value = defaultModel
       voice.value = 'alloy'
     }
@@ -132,6 +169,30 @@ watch(speed, async () => {
   providers.value[providerId].speed = speed.value
 })
 
+watch(language, () => {
+  setOptionalProviderConfig('language', language.value.trim())
+})
+
+watch(numSteps, () => {
+  setOptionalProviderConfig('numSteps', optionalNumber(numSteps.value))
+})
+
+watch(guidanceScale, () => {
+  setOptionalProviderConfig('guidanceScale', optionalNumber(guidanceScale.value))
+})
+
+watch(positionTemperature, () => {
+  setOptionalProviderConfig('positionTemperature', optionalNumber(positionTemperature.value))
+})
+
+watch(preprocessPrompt, () => {
+  setOptionalProviderConfig('preprocessPrompt', preprocessPrompt.value)
+})
+
+watch(denoise, () => {
+  setOptionalProviderConfig('denoise', denoise.value)
+})
+
 watch(model, () => {
   // Ensure provider config exists
   if (!providers.value[providerId])
@@ -180,6 +241,43 @@ const {
         :description="t('settings.pages.providers.provider.common.fields.field.speed.description')"
         :min="0.5"
         :max="2.0" :step="0.01"
+      />
+      <FieldInput
+        v-model="language"
+        label="Language"
+        description="Optional OmniVoice language hint, for example en or vi"
+        placeholder="auto"
+      />
+      <FieldInput
+        v-model="numSteps"
+        type="number"
+        label="OmniVoice steps"
+        description="Optional diffusion steps. Try 32 for higher clone quality."
+        placeholder="server default"
+      />
+      <FieldInput
+        v-model="guidanceScale"
+        type="number"
+        label="Guidance scale"
+        description="Optional OmniVoice CFG scale. Default is 2."
+        placeholder="server default"
+      />
+      <FieldInput
+        v-model="positionTemperature"
+        type="number"
+        label="Position temperature"
+        description="Optional position sampling temperature. Lower values can reduce randomness."
+        placeholder="server default"
+      />
+      <FieldCheckbox
+        v-model="preprocessPrompt"
+        label="Preprocess clone prompt"
+        description="Trim silence and normalize the reference prompt before cloning."
+      />
+      <FieldCheckbox
+        v-model="denoise"
+        label="Denoise clone prompt"
+        description="Use OmniVoice denoise conditioning for cloned voices."
       />
     </template>
 

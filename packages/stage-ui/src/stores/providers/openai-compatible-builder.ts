@@ -34,6 +34,33 @@ function logWarn(...args: unknown[]) {
     console.warn(...args)
 }
 
+const SPEECH_REQUEST_OPTION_KEYS = new Set([
+  'speed',
+  'responseFormat',
+  'language',
+  'numSteps',
+  'guidanceScale',
+  'positionTemperature',
+  'classTemperature',
+  'preprocessPrompt',
+  'postprocessOutput',
+  'denoise',
+  'audioChunkDuration',
+  'audioChunkThreshold',
+  'refAudio',
+  'refText',
+])
+
+export function pickSpeechRequestOptions(config: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!config)
+    return {}
+
+  return Object.fromEntries(
+    Object.entries(config)
+      .filter(([key, value]) => SPEECH_REQUEST_OPTION_KEYS.has(key) && value !== undefined && value !== ''),
+  )
+}
+
 export function buildOpenAICompatibleProvider(
   options: Partial<ProviderMetadata> & {
     id: string
@@ -288,7 +315,17 @@ export function buildOpenAICompatibleProvider(
     createProvider: async (config: { apiKey: string, baseUrl: string }) => {
       const apiKey = normalizeString(config.apiKey)
       const baseUrl = normalizeBaseUrl(config.baseUrl)
-      return creator(apiKey, baseUrl)
+      const provider = await creator(apiKey, baseUrl)
+
+      if (resolvedCategory === 'speech' && provider && typeof provider.speech === 'function') {
+        const speech = provider.speech.bind(provider)
+        provider.speech = (model: string, extraOptions?: Record<string, unknown>) => ({
+          ...speech(model),
+          ...pickSpeechRequestOptions(extraOptions),
+        })
+      }
+
+      return provider
     },
     capabilities: finalCapabilities,
     validators: finalValidators,
