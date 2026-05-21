@@ -44,6 +44,17 @@ class VoiceReferenceTests(unittest.TestCase):
         self.assertEqual(resolved["format"], "mp3")
         self.assertEqual(resolved["ref_text"], "hello stream")
 
+    def test_strips_utf8_bom_from_reference_text(self):
+        with TemporaryDirectory() as temp_dir:
+            ref_dir = Path(temp_dir)
+            (ref_dir / "neurosama.wav").write_bytes(b"wav")
+            (ref_dir / "neurosama.txt").write_bytes(b"\xef\xbb\xbfJust kidding.")
+
+            resolved = resolve_voice_reference(str(ref_dir), "neurosama")
+
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved["ref_text"], "Just kidding.")
+
 
 if __name__ == "__main__":
     unittest.main()

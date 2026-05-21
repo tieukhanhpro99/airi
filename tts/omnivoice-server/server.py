@@ -35,7 +35,7 @@ import torch
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from voice_refs import list_voice_references, resolve_voice_reference
+from voice_refs import list_voice_references, read_reference_text, resolve_voice_reference
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tts-server")
@@ -229,8 +229,7 @@ async def startup():
     # Load ref text from companion .txt file
     txt_path = REF_AUDIO_PATH.replace(".wav", ".txt")
     if not REF_TEXT and os.path.exists(txt_path):
-        with open(txt_path, "r", encoding="utf-8") as f:
-            REF_TEXT = f.read().strip()
+        REF_TEXT = read_reference_text(txt_path)
         logger.info(f"Loaded ref_text: {REF_TEXT[:80]}...")
 
     # Pre-load default model
