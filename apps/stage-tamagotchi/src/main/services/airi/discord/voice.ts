@@ -1,3 +1,5 @@
+import type { Buffer } from 'node:buffer'
+
 import type {
   AudioPlayer,
   AudioReceiveStream,
@@ -9,8 +11,6 @@ import type {
   DiscordVoiceTranscript,
 } from '@proj-airi/stage-shared'
 import type { Client as DiscordClient, VoiceBasedChannel } from 'discord.js'
-
-import { Buffer } from 'node:buffer'
 
 import {
   AudioPlayerStatus,
@@ -35,6 +35,7 @@ import { opus as prismOpus } from 'prism-media'
 
 import { decodeToPcm } from './voice-audio'
 import { transcribePcmMono16k } from './voice-stt'
+import { createVoiceSttSession } from './voice-stt-session'
 
 const log = useLogg('discord-voice').useGlobalConfig()
 
@@ -58,6 +59,12 @@ const MIN_UTTERANCE_MS = 250
  */
 const MAX_UTTERANCE_MS = 30_000
 
+/**
+ * Start STT for completed long chunks while the user is still speaking, then
+ * emit a single merged transcript after speech ends.
+ */
+const STT_PREFLIGHT_CHUNK_MS = 5_000
+
 interface UserStream {
   readonly userId: string
   readonly username: string
@@ -65,7 +72,7 @@ interface UserStream {
   readonly opusStream: AudioReceiveStream
   /** Decoder pipeline: opus → s16le 48k stereo. We resample/downmix during finalize. */
   readonly decoder: import('prism-media').opus.Decoder
-  pcmChunks: Buffer[]
+  readonly sttSession: ReturnType<typeof createVoiceSttSession>
   totalBytes: number
   startedAt: number
   finalizing: boolean
@@ -220,7 +227,22 @@ export function createVoiceManager(options: CreateVoiceManagerOptions): VoiceMan
       displayName,
       opusStream,
       decoder,
-      pcmChunks: [],
+      sttSession: createVoiceSttSession({
+        preflightChunkMs: STT_PREFLIGHT_CHUNK_MS,
+        transcribe: async (pcm) => {
+          const config = sttConfig
+          if (!config) {
+            callbacks.onLog('VOICE_STT_SKIP', 'No STT config available')
+            return ''
+          }
+
+          return transcribePcmMono16k(pcm, config).catch((err) => {
+            log.withError(err).warn('STT failed')
+            callbacks.onLog('VOICE_STT_ERROR', err?.message ?? 'unknown')
+            return ''
+          })
+        },
+      }),
       totalBytes: 0,
       startedAt: Date.now(),
       finalizing: false,
@@ -240,7 +262,7 @@ export function createVoiceManager(options: CreateVoiceManagerOptions): VoiceMan
       if (state.finalizing || state.closed)
         return
 
-      state.pcmChunks.push(chunk)
+      state.sttSession.appendStereo48k(chunk)
       state.totalBytes += chunk.length
 
       // Soft cap utterance length — finalize aggressively if user filibusters.
@@ -261,11 +283,8 @@ export function createVoiceManager(options: CreateVoiceManagerOptions): VoiceMan
   }
 
   /**
-   * Convert accumulated 48kHz stereo s16le into mono 16kHz s16le and dispatch to STT.
-   *
-   * The downsampling here is naive (decimation by 3 with channel averaging) which is
-   * acceptable for speech because we have a low-pass-friendly recipient (whisper).
-   * If we ever care about quality we'd swap in a proper resampler.
+   * Finalize the current voice turn and emit one transcript. Long turns may
+   * already have STT chunks in flight via the per-user session.
    */
   async function finalizeUtterance(userId: string) {
     const state = userStreams.get(userId)
@@ -279,37 +298,19 @@ export function createVoiceManager(options: CreateVoiceManagerOptions): VoiceMan
         return
       }
 
-      // Concatenate first so we can re-create a fresh accumulation immediately for the
-      // next utterance window without losing chunks.
-      const stereo48k = Buffer.concat(state.pcmChunks, state.totalBytes)
-
-      // Downsample 48k stereo → 16k mono (decimate-by-3 with channel average).
-      // s16le: 2 bytes per sample, 2 channels per frame, 4 bytes per stereo frame.
-      const stereoFrameBytes = 4
-      const stereoFrames = Math.floor(stereo48k.length / stereoFrameBytes)
-      const monoFrames = Math.floor(stereoFrames / 3)
-      const mono16k = Buffer.alloc(monoFrames * 2)
-
-      for (let i = 0; i < monoFrames; i++) {
-        const srcOffset = i * 3 * stereoFrameBytes
-        const left = stereo48k.readInt16LE(srcOffset)
-        const right = stereo48k.readInt16LE(srcOffset + 2)
-        const mono = (left + right) >> 1
-        mono16k.writeInt16LE(mono, i * 2)
-      }
-
       if (!sttConfig) {
         callbacks.onLog('VOICE_STT_SKIP', 'No STT config available')
         return
       }
 
-      callbacks.onLog('VOICE_UTTERANCE', `${state.displayName}: ${Math.round(elapsed / 100) / 10}s, ${Math.round(mono16k.length / 1024)} KB`)
+      const monoSizeKb = Math.round((state.totalBytes / 6) / 1024)
+      callbacks.onLog('VOICE_UTTERANCE', `${state.displayName}: ${Math.round(elapsed / 100) / 10}s, ${monoSizeKb} KB`)
 
-      const text = await transcribePcmMono16k(mono16k, sttConfig).catch((err) => {
-        log.withError(err).warn('STT failed')
-        callbacks.onLog('VOICE_STT_ERROR', err?.message ?? 'unknown')
-        return ''
-      })
+      const sttStartedAt = Date.now()
+      const result = await state.sttSession.finalize()
+      callbacks.onLog('VOICE_STT_DONE', `${state.displayName}: ${Date.now() - sttStartedAt}ms after end, ${result.chunks} chunk(s), ${result.preflightChunks} preflight`)
+
+      const text = result.text
 
       if (!text || text.trim().length === 0)
         return
