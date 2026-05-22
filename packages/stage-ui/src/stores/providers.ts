@@ -3334,6 +3334,8 @@ export const useProvidersStore = defineStore('providers', () => {
     providers: providerCredentials,
     getProviderConfig,
     getDefaultProviderConfig,
+    isProviderConfigured,
+    isProviderConfigDirty,
     addedProviders,
     markProviderAdded,
     unmarkProviderAdded,

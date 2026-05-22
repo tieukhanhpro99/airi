@@ -17,6 +17,7 @@ import { useI18n } from 'vue-i18n'
 const speechStore = useSpeechStore()
 const providersStore = useProvidersStore()
 const { providers } = storeToRefs(providersStore)
+const { activeSpeechProvider, activeSpeechModel, activeSpeechVoiceId } = storeToRefs(speechStore)
 const { t } = useI18n()
 
 const defaultVoiceSettings = {
@@ -199,6 +200,8 @@ watch(model, () => {
     providers.value[providerId] = {}
   // Save model to provider config (this persists to localStorage automatically)
   providers.value[providerId].model = model.value
+  if (activeSpeechProvider.value === providerId)
+    activeSpeechModel.value = model.value || ''
 })
 
 watch(voice, () => {
@@ -207,6 +210,8 @@ watch(voice, () => {
     providers.value[providerId] = {}
   // Save voice to provider config (this persists to localStorage automatically)
   providers.value[providerId].voice = voice.value
+  if (activeSpeechProvider.value === providerId)
+    activeSpeechVoiceId.value = (voice.value as string | undefined) || ''
 })
 
 // Use the composable to get validation logic and state

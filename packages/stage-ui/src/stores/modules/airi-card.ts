@@ -23,7 +23,9 @@ import {
 import { AiriCardSchema } from '../../types/card.schema'
 import { useBackgroundStore } from '../background'
 import { DisplayModelFormat, useDisplayModelsStore } from '../display-models'
+import { useProvidersStore } from '../providers'
 import { useSettingsStageModel } from '../settings/stage-model'
+import { shouldSyncAiriCardProvider } from './airi-card-module-sync'
 import { useConsciousnessStore } from './consciousness'
 import { useSpeechStore } from './speech'
 
@@ -229,6 +231,7 @@ export const useAiriCardStore = defineStore('airi-card', () => {
 
   const activeCard = computed(() => cards.value.get(activeCardId.value))
 
+  const providersStore = useProvidersStore()
   const consciousnessStore = useConsciousnessStore()
   const speechStore = useSpeechStore()
   const stageModelStore = useSettingsStageModel()
@@ -242,7 +245,7 @@ export const useAiriCardStore = defineStore('airi-card', () => {
   watch(() => activeCard.value?.extensions?.airi?.active_concepts, (next, prev) => {
     if (JSON.stringify(next) !== JSON.stringify(prev)) {
       const topConceptId = next?.[next.length - 1]
-      console.log(`[AiriCard] Concept Stack changed. Top concept: "${topConceptId}". Syncing manifestation overrides...`, { stack: next })
+      console.info(`[AiriCard] Concept Stack changed. Top concept: "${topConceptId}". Syncing manifestation overrides...`, { stack: next })
       void syncCardState(activeCard.value, true)
     }
   }, { deep: true })
@@ -257,6 +260,55 @@ export const useAiriCardStore = defineStore('airi-card', () => {
     activeSpeechVoiceId,
     activeSpeechModel,
   } = storeToRefs(speechStore)
+
+  function canSyncCardProvider(provider: string | undefined, options?: { allowSpeechNoop?: boolean }) {
+    return shouldSyncAiriCardProvider(provider, providersStore, options)
+  }
+
+  function syncRuntimeModulesToActiveCard() {
+    const cardId = activeCardId.value
+    const card = activeCard.value
+    if (!cardId || !card)
+      return
+
+    const airi = card.extensions?.airi
+    const modules = airi?.modules
+    const nextConsciousness = {
+      ...modules?.consciousness,
+      provider: activeConsciousnessProvider.value,
+      model: activeConsciousnessModel.value,
+    }
+    const nextSpeech = {
+      ...modules?.speech,
+      provider: activeSpeechProvider.value,
+      model: activeSpeechModel.value,
+      voice_id: activeSpeechVoiceId.value,
+    }
+
+    if (
+      modules?.consciousness?.provider === nextConsciousness.provider
+      && modules?.consciousness?.model === nextConsciousness.model
+      && modules?.speech?.provider === nextSpeech.provider
+      && modules?.speech?.model === nextSpeech.model
+      && modules?.speech?.voice_id === nextSpeech.voice_id
+    ) {
+      return
+    }
+
+    updateCard(cardId, {
+      extensions: {
+        ...card.extensions,
+        airi: {
+          ...airi,
+          modules: {
+            ...modules,
+            consciousness: nextConsciousness,
+            speech: nextSpeech,
+          },
+        },
+      },
+    } as any)
+  }
 
   function stripEmbeddedBackgroundData(extension: AiriExtension): AiriExtension {
     const modulesCopy: any = { ...extension.modules }
@@ -311,7 +363,7 @@ export const useAiriCardStore = defineStore('airi-card', () => {
     cards.value = nextCards
   }
 
-  const updateCard = (id: string, updates: Partial<AiriCard> | Partial<Card> | Partial<ccv3.CharacterCardV3>) => {
+  function updateCard(id: string, updates: Partial<AiriCard> | Partial<Card> | Partial<ccv3.CharacterCardV3>) {
     const existingCard = cards.value.get(id)
     if (!existingCard)
       return false
@@ -335,7 +387,7 @@ export const useAiriCardStore = defineStore('airi-card', () => {
     }
 
     const current = card.extensions?.airi?.groundingEnabled ?? false
-    console.log('[AiriCard] toggleGrounding:', { id, current, next: !current })
+    console.info('[AiriCard] toggleGrounding:', { id, current, next: !current })
     updateCard(id, {
       extensions: {
         ...card.extensions,
@@ -389,24 +441,26 @@ export const useAiriCardStore = defineStore('airi-card', () => {
 
     // 1. Sync Consciousness with stability guards
     const nextConsciousnessProvider = extension.modules?.consciousness?.provider
-    if (nextConsciousnessProvider && activeConsciousnessProvider.value !== nextConsciousnessProvider)
+    const canSyncConsciousness = canSyncCardProvider(nextConsciousnessProvider)
+    if (canSyncConsciousness && nextConsciousnessProvider && activeConsciousnessProvider.value !== nextConsciousnessProvider)
       activeConsciousnessProvider.value = nextConsciousnessProvider
 
     const nextConsciousnessModel = extension.modules?.consciousness?.model
-    if (nextConsciousnessModel && activeConsciousnessModel.value !== nextConsciousnessModel)
+    if (canSyncConsciousness && nextConsciousnessModel && activeConsciousnessModel.value !== nextConsciousnessModel)
       activeConsciousnessModel.value = nextConsciousnessModel
 
     // 2. Sync Speech with stability guards
     const nextSpeechProvider = extension.modules?.speech?.provider
-    if (nextSpeechProvider && activeSpeechProvider.value !== nextSpeechProvider)
+    const canSyncSpeech = canSyncCardProvider(nextSpeechProvider, { allowSpeechNoop: true })
+    if (canSyncSpeech && nextSpeechProvider && activeSpeechProvider.value !== nextSpeechProvider)
       activeSpeechProvider.value = nextSpeechProvider
 
     const nextSpeechModel = extension.modules?.speech?.model
-    if (nextSpeechModel && activeSpeechModel.value !== nextSpeechModel)
+    if (canSyncSpeech && nextSpeechModel && activeSpeechModel.value !== nextSpeechModel)
       activeSpeechModel.value = nextSpeechModel
 
     const nextSpeechVoiceId = extension.modules?.speech?.voice_id
-    if (nextSpeechVoiceId && activeSpeechVoiceId.value !== nextSpeechVoiceId)
+    if (canSyncSpeech && nextSpeechVoiceId && activeSpeechVoiceId.value !== nextSpeechVoiceId)
       activeSpeechVoiceId.value = nextSpeechVoiceId
 
     // 3. Sync Models & Parameters (ONLY if not prevented)
@@ -440,6 +494,9 @@ export const useAiriCardStore = defineStore('airi-card', () => {
         vrmStore.shouldUpdateView()
       }
     }
+
+    if (cards.value.get(activeCardId.value) === card)
+      syncRuntimeModulesToActiveCard()
   }
 
   async function activateCard(id: string, force = false) {
@@ -938,6 +995,14 @@ export const useAiriCardStore = defineStore('airi-card', () => {
   watch(activeCard, async (newCard: AiriCard | undefined) => {
     await syncCardState(newCard)
   })
+
+  watch([
+    activeConsciousnessProvider,
+    activeConsciousnessModel,
+    activeSpeechProvider,
+    activeSpeechModel,
+    activeSpeechVoiceId,
+  ], syncRuntimeModulesToActiveCard)
 
   function resetState() {
     activeCardId.reset()

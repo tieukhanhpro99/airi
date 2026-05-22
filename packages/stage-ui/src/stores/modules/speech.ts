@@ -233,6 +233,19 @@ export const useSpeechStore = defineStore('speech', () => {
   watch(activeSpeechVoiceId, updateActiveVoice, { immediate: true })
   watch(availableVoices, updateActiveVoice, { deep: true })
 
+  function syncOpenAICompatibleProviderConfig() {
+    if (activeSpeechProvider.value !== 'openai-compatible-audio-speech')
+      return
+
+    const providerConfig = providersStore.providers[activeSpeechProvider.value] ??= {}
+    if (activeSpeechModel.value && providerConfig.model !== activeSpeechModel.value)
+      providerConfig.model = activeSpeechModel.value
+    if (activeSpeechVoiceId.value && providerConfig.voice !== activeSpeechVoiceId.value)
+      providerConfig.voice = activeSpeechVoiceId.value
+  }
+
+  watch([activeSpeechProvider, activeSpeechModel, activeSpeechVoiceId], syncOpenAICompatibleProviderConfig, { immediate: true })
+
   /**
    * Non-verbal expression tags supported by OmniVoice-family providers.
    * These are KEPT in the text (not stripped) when the active provider supports them.

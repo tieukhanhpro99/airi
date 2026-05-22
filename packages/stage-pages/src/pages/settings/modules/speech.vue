@@ -69,17 +69,22 @@ function syncOpenAICompatibleSettings() {
     return
 
   const providerConfig = providersStore.getProviderConfig(activeSpeechProvider.value)
-  // Sync model from provider config (override any existing value from previous provider)
-  if (providerConfig?.model) {
-    activeSpeechModel.value = providerConfig.model as string
+  // Keep explicit module selections. Provider settings are only a fallback.
+  if (!activeSpeechModel.value) {
+    if (providerConfig?.model) {
+      activeSpeechModel.value = providerConfig.model as string
+    }
+    else {
+      // If no model in provider config, use default
+      activeSpeechModel.value = 'tts-1'
+    }
   }
-  else {
-    // If no model in provider config, use default
-    activeSpeechModel.value = 'tts-1'
+
+  // Keep explicit module voice selections. Provider settings are only a fallback.
+  if (activeSpeechVoiceId.value) {
+    updateCustomVoiceName(activeSpeechVoiceId.value)
   }
-  // Sync voice from provider config (override any existing value from previous provider)
-  // Use updateCustomVoiceName to ensure proper reactivity
-  if (providerConfig?.voice) {
+  else if (providerConfig?.voice) {
     activeSpeechVoiceId.value = providerConfig.voice as string
     updateCustomVoiceName(providerConfig.voice as string)
   }
