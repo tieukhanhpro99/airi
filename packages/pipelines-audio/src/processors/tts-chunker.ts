@@ -23,6 +23,7 @@ export interface TtsInputChunkOptions {
   boost?: number
   minimumWords?: number
   maximumWords?: number
+  hardPunctuationMinWords?: number
   stripNarrative?: boolean
   keepNarrativeText?: boolean
 }
@@ -41,6 +42,7 @@ export async function* chunkTtsInput(
     boost = 2,
     minimumWords = 4,
     maximumWords = 12,
+    hardPunctuationMinWords = 0,
   } = options ?? {}
 
   const iterator = readGraphemeClusters(
@@ -153,12 +155,16 @@ export async function* chunkTtsInput(
         chunk = ''
         chunkWordsCount = 0
       }
-      else if (flush || hard || chunkWordsCount > maximumWords || yieldCount < boost) {
+      const shouldSplitHard = hard && chunkWordsCount >= hardPunctuationMinWords
+      const shouldSplitLimit = chunkWordsCount > maximumWords
+      const shouldSplitBoost = yieldCount < boost
+
+      if (flush || shouldSplitHard || shouldSplitLimit || shouldSplitBoost) {
         const text = chunk.trim()
         yield {
           text,
           words: chunkWordsCount,
-          reason: flush ? 'flush' : hard ? 'hard' : chunkWordsCount > maximumWords ? 'limit' : 'boost',
+          reason: flush ? 'flush' : shouldSplitLimit ? 'limit' : shouldSplitHard ? 'hard' : 'boost',
         }
         yieldCount++
         chunk = ''

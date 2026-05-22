@@ -12,7 +12,7 @@ import { getImportUrlBundles } from '@proj-airi/drizzle-duckdb-wasm/bundles/impo
 import { useElectronWindowResizeStateEvent } from '@proj-airi/electron-vueuse'
 import { createLive2DLipSync } from '@proj-airi/model-driver-lipsync'
 import { wlipsyncProfile } from '@proj-airi/model-driver-lipsync/shared/wlipsync'
-import { createPlaybackManager, createSpeechPipeline } from '@proj-airi/pipelines-audio'
+import { createPlaybackManager, createSpeechPipeline, createTtsSegmentStream } from '@proj-airi/pipelines-audio'
 import { Live2DScene, useLive2d } from '@proj-airi/stage-ui-live2d'
 import { MMDScene, useMmd } from '@proj-airi/stage-ui-mmd'
 import { SpineScene } from '@proj-airi/stage-ui-spine'
@@ -585,7 +585,17 @@ const playbackManager = createPlaybackManager<AudioBuffer>({
   ownerOverflowPolicy: 'steal-oldest',
 })
 
+// Keep self-hosted TTS smooth by avoiding one request per short sentence.
+// Longer segments let the next generation finish while the current audio plays.
+const smoothTtsSegmenter = ((tokens, meta) => createTtsSegmentStream(tokens, meta, {
+  boost: 0,
+  minimumWords: 10,
+  maximumWords: 34,
+  hardPunctuationMinWords: 16,
+})) satisfies Parameters<typeof createSpeechPipeline<AudioBuffer>>[0]['segmenter']
+
 const speechPipeline = createSpeechPipeline<AudioBuffer>({
+  segmenter: smoothTtsSegmenter,
   tts: async (request, signal) => {
     if (import.meta.env.DEV)
       console.info('[Stage:TTS] Request received:', { text: request.text?.slice(0, 30), special: request.special })
